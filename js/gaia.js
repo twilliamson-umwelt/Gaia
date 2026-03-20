@@ -3943,100 +3943,121 @@ function toggleDarkMode() {
 // ══════════════════════════════════════════════════
 function exportMapPNG() {
   toast('Preparing PNG export…', 'info');
+
   const mapEl = document.getElementById('map');
   if (!mapEl) { toast('Map element not found', 'error'); return; }
 
   const rect = mapEl.getBoundingClientRect();
   const W = Math.round(rect.width), H = Math.round(rect.height);
+  const isDark = document.body.classList.contains('dark-mode');
+
+  // ── Step 1: try to draw tile images onto a test canvas ─────────────────
+  // If ANY cross-origin tile is drawn the canvas becomes tainted.
+  // We use a separate "tile canvas" and check if it's tainted before compositing.
+  const tileCanvas = document.createElement('canvas');
+  tileCanvas.width = W; tileCanvas.height = H;
+  const tCtx = tileCanvas.getContext('2d');
+  tCtx.fillStyle = isDark ? '#111920' : '#e8ecf0';
+  tCtx.fillRect(0, 0, W, H);
+
+  let tainted = false;
+  const imgs = Array.from(mapEl.querySelectorAll('.leaflet-pane img'));
+  imgs.forEach(function(img) {
+    if (!img.complete || !img.naturalWidth) return;
+    const ir = img.getBoundingClientRect();
+    try {
+      tCtx.drawImage(img, ir.left - rect.left, ir.top - rect.top, ir.width, ir.height);
+    } catch(e) { tainted = true; }
+  });
+  // Quick taint probe
+  if (!tainted) {
+    try { tileCanvas.toDataURL(); } catch(e) { tainted = true; }
+  }
+
+  // ── Step 2: build the final canvas ─────────────────────────────────────
   const out = document.createElement('canvas');
   out.width = W; out.height = H;
   const ctx = out.getContext('2d');
 
-  ctx.fillStyle = document.body.classList.contains('dark-mode') ? '#111920' : '#f4f6f8';
+  // Background
+  ctx.fillStyle = isDark ? '#111920' : '#e8ecf0';
   ctx.fillRect(0, 0, W, H);
 
-  // Draw all positioned tile/image layers
-  const allImgs = Array.from(mapEl.querySelectorAll('.leaflet-pane img'));
-  let pending = 0;
-
-  function drawImg(img) {
-    const ir = img.getBoundingClientRect();
-    try { ctx.drawImage(img, ir.left-rect.left, ir.top-rect.top, ir.width, ir.height); } catch(e) {}
+  // Only composite tiles if not tainted
+  if (!tainted) {
+    ctx.drawImage(tileCanvas, 0, 0);
   }
 
-  function afterTiles() {
-    // Render SVG vector overlay
+  // ── Step 3: render SVG vector overlay ──────────────────────────────────
+  function drawVectors(cb) {
     const svgEl = mapEl.querySelector('.leaflet-overlay-pane svg');
-    if (svgEl) {
-      // Clone and fix SVG dimensions/transforms
-      const svgClone = svgEl.cloneNode(true);
-      const svgRect = svgEl.getBoundingClientRect();
-      svgClone.setAttribute('width', svgRect.width);
-      svgClone.setAttribute('height', svgRect.height);
-      const svgStr = new XMLSerializer().serializeToString(svgClone);
-      const svgBlob = new Blob([svgStr], {type:'image/svg+xml;charset=utf-8'});
-      const svgUrl = URL.createObjectURL(svgBlob);
-      const svgImg = new Image(svgRect.width, svgRect.height);
-      svgImg.onload = () => {
-        ctx.drawImage(svgImg, svgRect.left-rect.left, svgRect.top-rect.top, svgRect.width, svgRect.height);
-        URL.revokeObjectURL(svgUrl);
-        afterVectors();
-      };
-      svgImg.onerror = () => { URL.revokeObjectURL(svgUrl); afterVectors(); };
-      svgImg.src = svgUrl;
-    } else {
-      afterVectors();
-    }
+    if (!svgEl) { cb(); return; }
+    const svgClone = svgEl.cloneNode(true);
+    const svgRect  = svgEl.getBoundingClientRect();
+    svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    svgClone.setAttribute('width',  svgRect.width  || W);
+    svgClone.setAttribute('height', svgRect.height || H);
+    const svgStr = new XMLSerializer().serializeToString(svgClone);
+    // Use data URI instead of blob URL — works in all secure contexts
+    const dataURI = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgStr);
+    const svgImg  = new Image();
+    // Safety timeout: if onload never fires (e.g. SVG namespace issue) proceed anyway
+    const guard = setTimeout(function() { svgImg.onerror = svgImg.onload = null; cb(); }, 2000);
+    svgImg.onload = function() {
+      clearTimeout(guard);
+      try { ctx.drawImage(svgImg, svgRect.left - rect.left, svgRect.top - rect.top); } catch(e) {}
+      cb();
+    };
+    svgImg.onerror = function() { clearTimeout(guard); cb(); };
+    svgImg.src = dataURI;
   }
 
-  function afterVectors() {
-    // Scale bar
-    const scaleText = document.getElementById('scale-display')?.textContent || '';
-    const zoom = state.map ? Math.round(state.map.getZoom()) : '';
-    ctx.fillStyle = 'rgba(255,255,255,0.8)';
-    ctx.fillRect(8, H-28, 200, 20);
+  // ── Step 4: annotations + download ─────────────────────────────────────
+  function annotateAndSave() {
+    const scale = document.getElementById('scale-display')?.textContent || '';
+    const zoom  = state.map ? Math.round(state.map.getZoom()) : '';
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillRect(8, H - 28, 190, 20);
     ctx.fillStyle = '#1c2b3a';
     ctx.font = 'bold 11px monospace';
-    ctx.fillText(`1:${scaleText}  Z${zoom}`, 14, H-12);
+    ctx.fillText('1:' + scale + '  Z' + zoom, 13, H - 12);
 
-    // Watermark
-    ctx.fillStyle = 'rgba(255,255,255,0.8)';
-    ctx.fillRect(W-80, H-20, 72, 14);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillRect(W - 80, H - 20, 72, 14);
     ctx.fillStyle = '#0074a8';
     ctx.font = '10px monospace';
-    ctx.fillText('Gaia v1.0', W-74, H-8);
+    ctx.fillText('Gaia v1.0', W - 74, H - 8);
 
-    // Download
-    out.toBlob(blob => {
-      if (!blob) { toast('PNG export failed — try zooming in first', 'error'); return; }
-      const url = URL.createObjectURL(blob);
+    // toBlob — fall back to toDataURL if blob is null or canvas is tainted
+    const filename = 'gaia-map-' + new Date().toISOString().slice(0, 10) + '.png';
+    const note = tainted ? ' (basemap omitted — cross-origin tiles)' : '';
+
+    function doDownload(url, revoke) {
       const a = document.createElement('a');
-      a.href = url; a.download = 'gaia-map-' + new Date().toISOString().slice(0,10) + '.png';
+      a.href = url; a.download = filename;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      toast('Map exported as PNG', 'success');
-    }, 'image/png');
+      if (revoke) setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+      toast('Map exported as PNG ✓' + note, 'success');
+    }
+
+    try {
+      out.toBlob(function(blob) {
+        if (blob) {
+          doDownload(URL.createObjectURL(blob), true);
+        } else {
+          // blob is null — fall back to dataURL
+          try { doDownload(out.toDataURL('image/png'), false); }
+          catch(e) { toast('PNG export failed: ' + e.message, 'error'); }
+        }
+      }, 'image/png');
+    } catch(e) {
+      // toBlob threw (shouldn't happen but just in case)
+      try { doDownload(out.toDataURL('image/png'), false); }
+      catch(e2) { toast('PNG export failed: ' + e2.message, 'error'); }
+    }
   }
 
-  // Draw images — track async loads
-  if (allImgs.length === 0) {
-    afterTiles();
-    return;
-  }
-  pending = allImgs.length;
-  allImgs.forEach(img => {
-    if (img.complete && img.naturalWidth > 0) {
-      drawImg(img);
-      if (--pending === 0) afterTiles();
-    } else {
-      const onDone = () => {
-        if (img.complete && img.naturalWidth > 0) drawImg(img);
-        if (--pending === 0) afterTiles();
-      };
-      img.addEventListener('load', onDone, {once:true});
-      img.addEventListener('error', onDone, {once:true});
-    }
-  });
+  drawVectors(annotateAndSave);
 }
 
 // ══════════════════════════════════════════════════

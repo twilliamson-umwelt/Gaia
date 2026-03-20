@@ -29,9 +29,12 @@ const agol = {
   searchQuery:  '',
   searchStart:  1,
   searchTotal:  0,
-  pageSize:     20,
-  currentFolder: null,   // null = root, string = folder id
+  pageSize:     50,
+  scope:        'mine',  // 'mine' | 'org' | 'groups'
+  currentFolder: null,
   currentFolderName: null,
+  groups:       [],
+  currentGroup: null,
 };
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -86,6 +89,7 @@ function agolSignOut() {
   agol.fullName = null; agol.orgName = null;
   agol.currentFolder = null; agol.currentFolderName = null;
   agol.searchQuery = ''; agol.searchStart = 1;
+  agol.scope = 'mine'; agol.groups = []; agol.currentGroup = null;
   try { sessionStorage.removeItem('gaia_agol_token'); } catch(e) {}
   _agolUpdateUI();
   toast('Signed out of ArcGIS Online', 'info');
@@ -222,15 +226,48 @@ function _agolRenderBrowser() {
     ? Math.max(0, Math.round((agol.expires - Date.now()) / 60000))
     : null;
   const expiryStr = expiryMins !== null
-    ? (expiryMins > 60 ? `~${Math.round(expiryMins/60)}h` : `${expiryMins}m`)
-    : '?';
+    ? (expiryMins > 60 ? `~${Math.round(expiryMins/60)}h` : `${expiryMins}m`) : '?';
 
-  // Build breadcrumb
-  let crumb = `<span onclick="agolGoHome()" style="cursor:pointer;color:var(--teal);">🏠 My Content</span>`;
-  if (agol.currentFolderName) {
-    crumb += `<span style="margin:0 4px;">›</span>
-      <span style="color:var(--text2);">${escHtml(agol.currentFolderName)}</span>`;
+  // Breadcrumb (only relevant for My Content folder browsing)
+  let crumb = '';
+  if (agol.scope === 'mine') {
+    crumb = `<span onclick="agolGoHome()" style="cursor:pointer;color:var(--teal);">🏠 My Content</span>`;
+    if (agol.currentFolderName) {
+      crumb += `<span style="margin:0 4px;color:var(--text3);">›</span>
+        <span style="color:var(--text2);">${escHtml(agol.currentFolderName)}</span>`;
+    }
   }
+
+  const scopeLabels = { mine:'👤 My Content', org:'🏢 Organisation', groups:'👥 Groups' };
+  const scopeTabs = Object.keys(scopeLabels).map(s => `
+    <div onclick="agolSetScope('${s}')"
+      style="padding:7px 12px;font-family:var(--mono);font-size:9px;cursor:pointer;white-space:nowrap;
+             flex:1;text-align:center;
+             border-bottom:3px solid ${agol.scope===s ? 'var(--teal)' : 'transparent'};
+             background:${agol.scope===s ? 'var(--bg)' : 'transparent'};
+             color:${agol.scope===s ? 'var(--teal)' : 'var(--text3)'};
+             font-weight:${agol.scope===s ? '600' : '400'};"
+      onmouseover="if('${s}'!==agol.scope)this.style.color='var(--text2)'"
+      onmouseout="if('${s}'!==agol.scope)this.style.color='var(--text3)'">
+      ${scopeLabels[s]}
+    </div>`).join('');
+
+  const placeholder = agol.scope === 'mine' ? 'Search my content…'
+    : agol.scope === 'org' ? 'Search organisation…' : 'Search group…';
+
+  // Group picker (only shown when scope = groups)
+  const groupPicker = agol.scope === 'groups' ? `
+    <div style="padding:5px 8px;border-bottom:1px solid var(--border);">
+      <select id="agol-group-select" onchange="agolSetGroup(this.value)"
+        style="width:100%;padding:4px 8px;font-family:var(--mono);font-size:10px;
+               border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--text);">
+        ${agol.groups.length
+          ? agol.groups.map(g =>
+              `<option value="${escHtml(g.id)}" ${g.id===agol.currentGroup?'selected':''}>
+                ${escHtml(g.title)}</option>`).join('')
+          : '<option value="">Loading groups…</option>'}
+      </select>
+    </div>` : '';
 
   return `
     <!-- User bar -->
@@ -250,28 +287,32 @@ function _agolRenderBrowser() {
         style="font-size:9px;padding:2px 8px;flex-shrink:0;">Sign Out</button>
     </div>
 
+    <!-- Scope tabs -->
+    <div style="display:flex;border-bottom:1px solid var(--border);background:var(--bg2);">
+      ${scopeTabs}
+    </div>
+
+    ${groupPicker}
+
     <!-- Search -->
-    <div style="padding:7px 8px;border-bottom:1px solid var(--border);display:flex;gap:6px;">
+    <div style="padding:6px 8px;border-bottom:1px solid var(--border);display:flex;gap:6px;">
       <input type="text" id="agol-search-input" value="${escHtml(agol.searchQuery)}"
-        placeholder="Search my content…"
-        style="flex:1;padding:5px 8px;font-family:var(--mono);font-size:10px;
+        placeholder="${placeholder}"
+        style="flex:1;padding:4px 8px;font-family:var(--mono);font-size:10px;
                border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--text);"
         onkeydown="if(event.key==='Enter')agolSearch()"/>
       <button class="btn btn-ghost btn-sm" onclick="agolSearch()"
         style="font-size:10px;padding:3px 10px;">🔍</button>
-      ${agol.searchQuery ? `
-        <button class="btn btn-ghost btn-sm" onclick="agolClearSearch()"
-          style="font-size:10px;padding:3px 8px;" title="Clear search">✕</button>` : ''}
+      ${agol.searchQuery ? `<button class="btn btn-ghost btn-sm" onclick="agolClearSearch()"
+        style="font-size:10px;padding:3px 8px;">✕</button>` : ''}
     </div>
 
-    <!-- Breadcrumb -->
-    <div style="padding:5px 12px;border-bottom:1px solid var(--border);
+    ${crumb ? `<div style="padding:5px 12px;border-bottom:1px solid var(--border);
                 font-family:var(--mono);font-size:9px;display:flex;align-items:center;gap:4px;">
-      ${crumb}
-    </div>
+      ${crumb}</div>` : ''}
 
     <!-- Results -->
-    <div id="agol-results" style="overflow-y:auto;max-height:320px;">
+    <div id="agol-results" style="overflow-y:auto;max-height:360px;">
       <div style="padding:16px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--text3);">
         Loading…
       </div>
@@ -279,13 +320,47 @@ function _agolRenderBrowser() {
 
     <!-- Pagination -->
     <div id="agol-pagination" style="display:none;padding:6px 12px;border-top:1px solid var(--border);
-      flex;align-items:center;gap:8px;font-family:var(--mono);font-size:9px;color:var(--text3);">
+      display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:9px;color:var(--text3);">
     </div>`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
 //  BROWSING
 // ─────────────────────────────────────────────────────────────────────────
+async function agolSetScope(scope) {
+  agol.scope = scope;
+  agol.searchQuery = '';
+  agol.searchStart = 1;
+  agol.currentFolder = null;
+  agol.currentFolderName = null;
+  // For groups, load group list if not already loaded
+  if (scope === 'groups' && !agol.groups.length) {
+    await _agolLoadGroups();
+  }
+  // Re-render browser (updates active tab highlight + group picker visibility)
+  const pane = document.getElementById('agol-pane');
+  if (pane) pane.innerHTML = _agolRenderBrowser();
+  _agolFetchContent();
+}
+
+async function agolSetGroup(groupId) {
+  agol.currentGroup = groupId;
+  agol.searchStart = 1;
+  if (groupId) _agolFetchContent();
+}
+
+async function _agolLoadGroups() {
+  try {
+    const data = await _agolPost('/sharing/rest/community/self');
+    agol.groups = (data.groups || []).sort((a, b) => a.title.localeCompare(b.title));
+    if (agol.groups.length && !agol.currentGroup) {
+      agol.currentGroup = agol.groups[0].id;
+    }
+  } catch(e) {
+    console.warn('AGOL groups fetch failed:', e.message);
+  }
+}
+
 function agolSearch() {
   const el = document.getElementById('agol-search-input');
   agol.searchQuery = el ? el.value.trim() : '';
@@ -365,8 +440,13 @@ async function _agolQueryItems() {
     'WMS', 'WFS', 'Feature Collection',
   ].map(t => `type:"${t}"`).join(' OR ');
 
-  if (agol.currentFolder) {
-    // Folder browse — user content API (no search)
+  const typeFilter = `(${layerTypes})`;
+  const searchFilter = agol.searchQuery
+    ? ` AND (title:"${agol.searchQuery}" OR tags:"${agol.searchQuery}")`
+    : '';
+
+  // ── My Content — folder browse ─────────────────────────
+  if (agol.scope === 'mine' && agol.currentFolder) {
     const data = await _agolPost(
       `/sharing/rest/content/users/${agol.username}/${agol.currentFolder}`
     );
@@ -374,37 +454,58 @@ async function _agolQueryItems() {
     return { results: items, total: items.length };
   }
 
-  // Root — show folders + items together
-  let q = `(${layerTypes}) AND owner:${agol.username}`;
-  if (agol.searchQuery) {
-    q += ` AND (title:"${agol.searchQuery}" OR tags:"${agol.searchQuery}")`;
+  // ── My Content — root ──────────────────────────────────
+  if (agol.scope === 'mine') {
+    const q = `${typeFilter} AND owner:${agol.username}${searchFilter}`;
+    const searchData = await _agolPost('/sharing/rest/search', {
+      q, num: agol.pageSize, start: agol.searchStart,
+      sortField:'modified', sortOrder:'desc',
+    });
+    agol.searchTotal = searchData.total || 0;
+    const items = searchData.results || [];
+    let folders = [];
+    if (!agol.searchQuery) {
+      try {
+        const ud = await _agolPost(`/sharing/rest/content/users/${agol.username}`);
+        folders = (ud.folders || []).map(f => ({ ...f, _isFolder: true }));
+      } catch(e) {}
+    }
+    return { results: [...folders, ...items], total: agol.searchTotal, folders: folders.length };
   }
 
-  const searchData = await _agolPost('/sharing/rest/search', {
-    q,
-    num:      agol.pageSize,
-    start:    agol.searchStart,
-    sortField:'modified',
-    sortOrder:'desc',
-  });
-
-  agol.searchTotal = searchData.total || 0;
-  const items = searchData.results || [];
-
-  // Fetch folders only at root without a search query
-  let folders = [];
-  if (!agol.searchQuery) {
-    try {
-      const userData = await _agolPost(`/sharing/rest/content/users/${agol.username}`);
-      folders = (userData.folders || []).map(f => ({ ...f, _isFolder: true }));
-    } catch(e) { /* folders are optional */ }
+  // ── Organisation ────────────────────────────────────────
+  if (agol.scope === 'org') {
+    // Ensure we have orgId — re-fetch self if needed
+    if (!agol.orgId) {
+      await _agolFetchSelf();
+      if (!agol.orgId) throw new Error('Could not determine organisation ID. Try signing out and back in.');
+    }
+    const q = `${typeFilter} AND orgid:${agol.orgId}${searchFilter}`;
+    const searchData = await _agolPost('/sharing/rest/search', {
+      q, num: agol.pageSize, start: agol.searchStart,
+      sortField:'modified', sortOrder:'desc',
+    });
+    agol.searchTotal = searchData.total || 0;
+    return { results: searchData.results || [], total: agol.searchTotal };
   }
 
-  return {
-    results: [...folders, ...items],
-    total:   agol.searchTotal,
-    folders: folders.length,
-  };
+  // ── Groups ──────────────────────────────────────────────
+  if (agol.scope === 'groups') {
+    if (!agol.currentGroup) return { results: [], total: 0 };
+    const q = `${typeFilter}${searchFilter}`;
+    const searchData = await _agolPost('/sharing/rest/search', {
+      q,
+      groups:   agol.currentGroup,
+      num:      agol.pageSize,
+      start:    agol.searchStart,
+      sortField:'modified',
+      sortOrder:'desc',
+    });
+    agol.searchTotal = searchData.total || 0;
+    return { results: searchData.results || [], total: agol.searchTotal };
+  }
+
+  return { results: [], total: 0 };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
