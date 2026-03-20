@@ -774,6 +774,15 @@ select option { background: var(--bg2); }
         <button class="btn btn-ghost btn-sm" onclick="fcInsert('.toUpperCase()')" style="font-size:10px;padding:2px 6px;">UPPER</button>
         <button class="btn btn-ghost btn-sm" onclick="fcInsert('.toLowerCase()')" style="font-size:10px;padding:2px 6px;">lower</button>
       </div>
+      <!-- Geometry quick-calc -->
+      <div style="display:flex;flex-wrap:wrap;gap:4px;padding-top:4px;border-top:1px solid var(--border);">
+        <span style="font-family:var(--mono);font-size:9px;color:var(--text3);align-self:center;margin-right:2px;">Geometry:</span>
+        <button class="btn btn-ghost btn-sm" onclick="fcCalcArea('ha')" style="font-size:10px;padding:2px 6px;" title="Compute polygon area in hectares">Area ha</button>
+        <button class="btn btn-ghost btn-sm" onclick="fcCalcArea('sqm')" style="font-size:10px;padding:2px 6px;" title="Compute polygon area in m²">Area m²</button>
+        <button class="btn btn-ghost btn-sm" onclick="fcCalcArea('sqkm')" style="font-size:10px;padding:2px 6px;" title="Compute polygon area in km²">Area km²</button>
+        <button class="btn btn-ghost btn-sm" onclick="fcCalcLength('m')" style="font-size:10px;padding:2px 6px;" title="Compute line length in metres">Length m</button>
+        <button class="btn btn-ghost btn-sm" onclick="fcCalcLength('km')" style="font-size:10px;padding:2px 6px;" title="Compute line length in km">Length km</button>
+      </div>
       <!-- Preview -->
       <div id="fc-preview" style="font-family:var(--mono);font-size:10px;color:var(--text3);padding:6px 8px;background:var(--bg3);border-radius:4px;border:1px solid var(--border);min-height:28px;"></div>
       <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;">
@@ -894,6 +903,9 @@ select option { background: var(--bg2); }
           <option value="">— no layers —</option>
         </select>
         <div style="margin-left:auto;display:flex;gap:5px;align-items:center;">
+          <button class="btn btn-ghost btn-sm" onclick="openFieldCalcFromTable()" title="Field Calculator" style="font-size:9px;padding:2px 8px;">
+            ƒ Calc
+          </button>
           <button class="btn btn-ghost btn-sm" onclick="openSelectByAttribute()" title="Select features by attribute value" style="font-size:9px;padding:2px 8px;">
             ⊞ Select by Attr
           </button>
@@ -929,12 +941,8 @@ select option { background: var(--bg2); }
       <button class="btn btn-ghost btn-full" onclick="toggleWidgetPanel()" id="widgets-open-btn" style="font-size:10px;">
         ⚙ Widgets
       </button>
-      <button class="btn btn-ghost btn-full" onclick="openClassifyPanel()" id="classify-open-btn" style="font-size:10px;" title="Thematic / classified symbology">
-        🎨 Classify Symbology
-      </button>
-      <button class="btn btn-ghost btn-full" onclick="openFieldCalcPanel()" id="fieldcalc-open-btn" style="font-size:10px;" title="Field Calculator">
-        ƒ Field Calculator
-      </button>
+
+
     </div>
     <!-- Layer Stats -->
     <div class="panel-section" id="stats-section" style="display:none;">
@@ -962,6 +970,14 @@ select option { background: var(--bg2); }
     </div>
     <!-- Feature Inspector stub (hidden, keeps JS compatibility) -->
     <div id="feature-content" style="display:none;"></div>
+    <!-- Legend -->
+    <div class="panel-section" id="legend-section" style="display:none;">
+      <div class="panel-header" onclick="toggleSection(this)">
+        <span>▤</span> Legend
+        <svg class="chevron" width="12" height="12" viewBox="0 0 12 12"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+      </div>
+      <div class="panel-body" id="legend-body" style="padding:8px 10px;"></div>
+    </div>
   </div>
 </div>
 
@@ -1136,7 +1152,8 @@ select option { background: var(--bg2); }
   <div class="ctx-item" onclick="ctxClearSelection()"><span class="ctx-icon">⬜</span> Clear Selection</div>
   <div class="ctx-sep"></div>
   <div class="ctx-item" onclick="ctxRenameLayer()"><span class="ctx-icon">✎</span> Rename Layer</div>
-  <div class="ctx-item" onclick="ctxChangeColor()"><span class="ctx-icon">🎨</span> Change Colour</div>
+  <div class="ctx-item" onclick="ctxChangeColor()"><span class="ctx-icon">🎨</span> Symbology</div>
+  <div class="ctx-item" id="ctx-classify-item" onclick="ctxOpenClassify()"><span class="ctx-icon">🎨</span> Classify by Field</div>
   <div class="ctx-sep"></div>
   <div class="ctx-item danger" onclick="ctxRemoveLayer()"><span class="ctx-icon">✕</span> Remove Layer</div>
 </div>
@@ -2400,6 +2417,7 @@ function updateStats() {
     document.getElementById('bb-s').textContent=b.getSouth().toFixed(5);
     document.getElementById('bb-n').textContent=b.getNorth().toFixed(5);
   } catch(e){}
+  updateLegend();
 }
 
 function clearStats() {
@@ -2408,6 +2426,76 @@ function clearStats() {
   document.getElementById('stats-section').style.display='none';
   document.getElementById('attr-strip-table-wrap').innerHTML='<div class="empty-state">Select a layer to view attributes</div>';
   document.getElementById('table-count').textContent='';
+  const ls = document.getElementById('legend-section');
+  if (ls) ls.style.display = 'none';
+}
+
+// ── LEGEND ──────────────────────────────────────
+function updateLegend() {
+  const legendSection = document.getElementById('legend-section');
+  const legendBody    = document.getElementById('legend-body');
+  if (!legendSection || !legendBody) return;
+
+  const layer = state.layers[state.activeLayerIndex];
+  if (!layer || layer.isTile) { legendSection.style.display = 'none'; return; }
+
+  legendSection.style.display = 'block';
+
+  const geomType = layer.geomType || '';
+  const isPoint   = geomType.includes('Point');
+  const isLine    = geomType.includes('Line');
+
+  // If layer has classify classes, show classified legend
+  if (layer.classified && layer.classifyClasses && layer.classifyClasses.length) {
+    const field = layer.classifyField || '';
+    const rows = layer.classifyClasses.map(c => {
+      const swatch = isPoint
+        ? `<div style="width:12px;height:12px;border-radius:50%;background:${c.color};border:1.5px solid rgba(0,0,0,0.2);flex-shrink:0;"></div>`
+        : isLine
+          ? `<div style="width:22px;height:3px;background:${c.color};border-radius:2px;flex-shrink:0;margin:4px 0;"></div>`
+          : `<div style="width:18px;height:12px;border-radius:2px;background:${c.color};border:1px solid rgba(0,0,0,0.15);flex-shrink:0;"></div>`;
+      return `<div style="display:flex;align-items:center;gap:6px;padding:2px 0;">
+        ${swatch}
+        <span style="font-family:var(--mono);font-size:9px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${escHtml(String(c.label))}</span>
+        <span style="font-family:var(--mono);font-size:8px;color:var(--text3);">${c.count}</span>
+      </div>`;
+    }).join('');
+    legendBody.innerHTML = `
+      <div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">${escHtml(field)}</div>
+      ${rows}`;
+    return;
+  }
+
+  // Default single-colour legend
+  const color      = layer.fillColor    || layer.color || '#3498db';
+  const outline    = layer.outlineColor || layer.color || '#3498db';
+  const noFill     = layer.noFill || false;
+  const shape      = layer.pointShape || 'circle';
+
+  let swatch;
+  if (isPoint) {
+    const size = 14;
+    let svgShape;
+    if (shape === 'square') {
+      svgShape = `<rect x="2" y="2" width="${size-4}" height="${size-4}" fill="${noFill?'none':color}" stroke="${outline}" stroke-width="1.5" rx="1"/>`;
+    } else if (shape === 'triangle') {
+      svgShape = `<polygon points="${size/2},2 ${size-2},${size-2} 2,${size-2}" fill="${noFill?'none':color}" stroke="${outline}" stroke-width="1.5"/>`;
+    } else {
+      const r=(size-4)/2;
+      svgShape = `<circle cx="${size/2}" cy="${size/2}" r="${r}" fill="${noFill?'none':color}" stroke="${outline}" stroke-width="1.5"/>`;
+    }
+    swatch = `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="flex-shrink:0;">${svgShape}</svg>`;
+  } else if (isLine) {
+    swatch = `<div style="width:28px;height:3px;background:${color};border-radius:2px;flex-shrink:0;margin:5px 0;"></div>`;
+  } else {
+    swatch = `<div style="width:22px;height:14px;border-radius:3px;background:${noFill?'transparent':color};border:2px solid ${outline};flex-shrink:0;"></div>`;
+  }
+
+  legendBody.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;padding:2px 0;">
+      ${swatch}
+      <span style="font-family:var(--mono);font-size:10px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(layer.name)}</span>
+    </div>`;
 }
 
 // ── ATTRIBUTE TABLE ──
@@ -5191,6 +5279,24 @@ function ctxChangeColor() {
   openColorPickerForLayer(ctxLayerIdx);
 }
 
+function ctxOpenClassify() {
+  document.getElementById('layer-ctx-menu').classList.remove('visible');
+  // Open classify modal, pre-select this layer
+  const bd = document.getElementById('classify-backdrop');
+  bd.classList.add('open');
+  const sel = document.getElementById('cls-layer');
+  sel.innerHTML = '<option value="">— select layer —</option>';
+  state.layers.forEach((l, i) => {
+    if (!l.isTile) {
+      const opt = document.createElement('option');
+      opt.value = i; opt.textContent = l.name;
+      if (i === ctxLayerIdx) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  });
+  onClsLayerChange();
+}
+
 function openColorPickerForLayer(layerIdx) {
   _colorPickerLayerIdx = layerIdx;
   const layer = state.layers[layerIdx]; if (!layer) return;
@@ -5429,89 +5535,99 @@ function toggleDarkMode() {
 // ══════════════════════════════════════════════════
 function exportMapPNG() {
   toast('Preparing PNG export…', 'info');
-  // Use leaflet-image-like approach via html2canvas or direct canvas capture
-  // Leaflet renders to canvas tiles — we gather them
   const mapEl = document.getElementById('map');
   if (!mapEl) { toast('Map element not found', 'error'); return; }
 
-  // Collect all tile canvases and draw to an output canvas
   const rect = mapEl.getBoundingClientRect();
   const W = Math.round(rect.width), H = Math.round(rect.height);
   const out = document.createElement('canvas');
   out.width = W; out.height = H;
   const ctx = out.getContext('2d');
 
-  // Fill background
   ctx.fillStyle = document.body.classList.contains('dark-mode') ? '#111920' : '#f4f6f8';
   ctx.fillRect(0, 0, W, H);
 
-  // Draw tile images
-  const imgs = mapEl.querySelectorAll('.leaflet-tile-container img, .leaflet-tile-pane img');
-  let drawn = 0, total = imgs.length;
+  // Draw all positioned tile/image layers
+  const allImgs = Array.from(mapEl.querySelectorAll('.leaflet-pane img'));
+  let pending = 0;
 
-  function tryFinish() {
-    drawn++;
-    if (drawn < total) return;
-    // Draw SVG overlay (vector features) via foreignObject
+  function drawImg(img) {
+    const ir = img.getBoundingClientRect();
+    try { ctx.drawImage(img, ir.left-rect.left, ir.top-rect.top, ir.width, ir.height); } catch(e) {}
+  }
+
+  function afterTiles() {
+    // Render SVG vector overlay
     const svgEl = mapEl.querySelector('.leaflet-overlay-pane svg');
     if (svgEl) {
-      const svgStr = new XMLSerializer().serializeToString(svgEl);
+      // Clone and fix SVG dimensions/transforms
+      const svgClone = svgEl.cloneNode(true);
+      const svgRect = svgEl.getBoundingClientRect();
+      svgClone.setAttribute('width', svgRect.width);
+      svgClone.setAttribute('height', svgRect.height);
+      const svgStr = new XMLSerializer().serializeToString(svgClone);
       const svgBlob = new Blob([svgStr], {type:'image/svg+xml;charset=utf-8'});
       const svgUrl = URL.createObjectURL(svgBlob);
-      const svgImg = new Image();
+      const svgImg = new Image(svgRect.width, svgRect.height);
       svgImg.onload = () => {
-        const svgRect = svgEl.getBoundingClientRect();
-        ctx.drawImage(svgImg, svgRect.left - rect.left, svgRect.top - rect.top);
+        ctx.drawImage(svgImg, svgRect.left-rect.left, svgRect.top-rect.top, svgRect.width, svgRect.height);
         URL.revokeObjectURL(svgUrl);
-        // Add scale bar text
-        const scaleText = document.getElementById('scale-display')?.textContent || '';
-        const zoom = state.map ? Math.round(state.map.getZoom()) : '';
-        ctx.fillStyle = 'rgba(255,255,255,0.75)';
-        ctx.fillRect(8, H - 30, 180, 22);
-        ctx.fillStyle = '#1c2b3a';
-        ctx.font = '11px IBM Plex Mono, monospace';
-        ctx.fillText(`Scale 1:${scaleText}  |  Zoom ${zoom}`, 14, H - 14);
-        finishExport();
+        afterVectors();
       };
-      svgImg.onerror = finishExport;
+      svgImg.onerror = () => { URL.revokeObjectURL(svgUrl); afterVectors(); };
       svgImg.src = svgUrl;
     } else {
-      finishExport();
+      afterVectors();
     }
   }
 
-  function finishExport() {
-    // Add Gaia watermark
-    ctx.fillStyle = 'rgba(255,255,255,0.7)';
-    ctx.fillRect(W - 90, H - 22, 82, 16);
-    ctx.fillStyle = '#0074a8';
-    ctx.font = '10px IBM Plex Mono, monospace';
-    ctx.fillText('Gaia v1.0', W - 84, H - 9);
+  function afterVectors() {
+    // Scale bar
+    const scaleText = document.getElementById('scale-display')?.textContent || '';
+    const zoom = state.map ? Math.round(state.map.getZoom()) : '';
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.fillRect(8, H-28, 200, 20);
+    ctx.fillStyle = '#1c2b3a';
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText(`1:${scaleText}  Z${zoom}`, 14, H-12);
 
+    // Watermark
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    ctx.fillRect(W-80, H-20, 72, 14);
+    ctx.fillStyle = '#0074a8';
+    ctx.font = '10px monospace';
+    ctx.fillText('Gaia v1.0', W-74, H-8);
+
+    // Download
     out.toBlob(blob => {
+      if (!blob) { toast('PNG export failed — try zooming in first', 'error'); return; }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url;
-      a.download = 'gaia-map-' + new Date().toISOString().slice(0,10) + '.png';
-      a.click();
+      a.href = url; a.download = 'gaia-map-' + new Date().toISOString().slice(0,10) + '.png';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
       URL.revokeObjectURL(url);
       toast('Map exported as PNG', 'success');
-    });
+    }, 'image/png');
   }
 
-  if (total === 0) { tryFinish(); return; }
-
-  imgs.forEach(img => {
-    if (!img.complete || img.naturalWidth === 0) {
-      img.onload = () => tryFinish();
-      img.onerror = () => tryFinish();
-      return;
+  // Draw images — track async loads
+  if (allImgs.length === 0) {
+    afterTiles();
+    return;
+  }
+  pending = allImgs.length;
+  allImgs.forEach(img => {
+    if (img.complete && img.naturalWidth > 0) {
+      drawImg(img);
+      if (--pending === 0) afterTiles();
+    } else {
+      const onDone = () => {
+        if (img.complete && img.naturalWidth > 0) drawImg(img);
+        if (--pending === 0) afterTiles();
+      };
+      img.addEventListener('load', onDone, {once:true});
+      img.addEventListener('error', onDone, {once:true});
     }
-    const imgRect = img.getBoundingClientRect();
-    try {
-      ctx.drawImage(img, imgRect.left - rect.left, imgRect.top - rect.top, imgRect.width, imgRect.height);
-    } catch(e) {} // cross-origin tiles silently skipped
-    tryFinish();
   });
 }
 
@@ -5604,13 +5720,16 @@ function previewClassify() {
   const classes = _buildClasses(vals, method, nClasses, ramp);
   _classifyState = { classes, layerIdx, field, method };
 
-  const swatches = classes.map(c =>
+  const swatches = classes.map((c, ci) =>
     `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;">
-      <div style="width:28px;height:14px;border-radius:3px;background:${c.color};border:1px solid rgba(0,0,0,0.1);flex-shrink:0;"></div>
-      <span style="font-family:var(--mono);font-size:9px;color:var(--text2);">${c.label}</span>
-      <span style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-left:auto;">${c.count} feature${c.count!==1?'s':''}</span>
+      <div style="position:relative;flex-shrink:0;">
+        <div data-cls-idx="${ci}" style="width:28px;height:14px;border-radius:3px;background:${c.color};border:1px solid rgba(0,0,0,0.1);cursor:pointer;title='Click to change colour'" onclick="clsEditColor(${ci},this)"></div>
+        <input type="color" style="position:absolute;opacity:0;width:0;height:0;pointer-events:none;" id="cls-color-input-${ci}" value="${c.color}" onchange="clsApplyColor(${ci},this.value)"/>
+      </div>
+      <span style="font-family:var(--mono);font-size:9px;color:var(--text2);flex:1;">${escHtml(String(c.label))}</span>
+      <span style="font-family:var(--mono);font-size:9px;color:var(--text3);">${c.count} ft</span>
     </div>`).join('');
-  preview.innerHTML = `<div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">${field}</div>${swatches}`;
+  preview.innerHTML = `<div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">${escHtml(field)}</div>${swatches}`;
 }
 
 function _buildClasses(vals, method, n, ramp) {
@@ -5654,6 +5773,19 @@ function _buildClasses(vals, method, n, ramp) {
     });
   }
   return classes;
+}
+
+function clsEditColor(ci, swatch) {
+  // Trigger hidden colour input next to swatch
+  const inp = document.getElementById('cls-color-input-' + ci);
+  if (inp) inp.click();
+}
+function clsApplyColor(ci, color) {
+  if (!_classifyState.classes || !_classifyState.classes[ci]) return;
+  _classifyState.classes[ci].color = color;
+  // Update the swatch preview inline
+  const swatch = document.querySelector('[data-cls-idx="' + ci + '"]');
+  if (swatch) swatch.style.background = color;
 }
 
 function applyClassify() {
@@ -5701,6 +5833,7 @@ function applyClassify() {
 
   document.getElementById('classify-backdrop').classList.remove('open');
   toast(`Classified "${layer.name}" by "${field}" — ${classes.length} classes`, 'success');
+  updateLegend();
 }
 
 function resetLayerSymbology() {
@@ -5730,12 +5863,16 @@ function resetLayerSymbology() {
   layer.leafletLayer = newL;
   refreshLayerZOrder();
   toast('Symbology reset to default', 'success');
+  updateLegend();
 }
 
 // ══════════════════════════════════════════════════
 // FIELD CALCULATOR
 // ══════════════════════════════════════════════════
-function openFieldCalcPanel() {
+function openFieldCalcPanel() { _openFieldCalc(state.activeLayerIndex); }
+function openFieldCalcFromTable() { _openFieldCalc(state.activeLayerIndex); }
+
+function _openFieldCalc(defaultIdx) {
   const bd = document.getElementById('fieldcalc-backdrop');
   bd.classList.add('open');
   const sel = document.getElementById('fc-layer');
@@ -5744,7 +5881,7 @@ function openFieldCalcPanel() {
     if (!l.isTile) {
       const opt = document.createElement('option');
       opt.value = i; opt.textContent = l.name;
-      if (i === state.activeLayerIndex) opt.selected = true;
+      if (i === defaultIdx) opt.selected = true;
       sel.appendChild(opt);
     }
   });
@@ -5766,6 +5903,74 @@ function onFCLayerChange() {
     listEl.appendChild(chip);
   });
   fcPreview();
+}
+
+// ── GEOMETRY CALCULATIONS (area / length) ─────────
+function _haversineM(p1, p2) {
+  const R = 6371000, toRad = x => x * Math.PI / 180;
+  const dLat = toRad(p2[1]-p1[1]), dLon = toRad(p2[0]-p1[0]);
+  const a = Math.sin(dLat/2)**2 + Math.cos(toRad(p1[1]))*Math.cos(toRad(p2[1]))*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+function _ringAreaM2(ring) {
+  // Spherical polygon area via Gauss's formula
+  const R = 6371000; let area = 0; const n = ring.length;
+  for (let i = 0; i < n; i++) {
+    const j = (i+1)%n;
+    area += (ring[j][0]-ring[i][0]) * Math.PI/180 *
+            (2 + Math.sin(ring[i][1]*Math.PI/180) + Math.sin(ring[j][1]*Math.PI/180));
+  }
+  return Math.abs(area * R * R / 2);
+}
+function _calcGeomArea(feat, unit) {
+  const g = feat.geometry; if (!g) return null;
+  let m2 = 0;
+  const doRings = rings => { m2 += _ringAreaM2(rings[0]); for (let i=1;i<rings.length;i++) m2 -= _ringAreaM2(rings[i]); };
+  if (g.type==='Polygon') doRings(g.coordinates);
+  else if (g.type==='MultiPolygon') g.coordinates.forEach(p => doRings(p));
+  else return null;
+  if (unit==='ha')   return Math.round(m2/10000*1000)/1000;
+  if (unit==='sqkm') return Math.round(m2/1e6*10000)/10000;
+  return Math.round(m2*100)/100;
+}
+function _calcGeomLength(feat, unit) {
+  const g = feat.geometry; if (!g) return null;
+  const lineLen = pts => { let d=0; for(let i=0;i<pts.length-1;i++) d+=_haversineM(pts[i],pts[i+1]); return d; };
+  let total = 0;
+  if (g.type==='LineString') total = lineLen(g.coordinates);
+  else if (g.type==='MultiLineString') g.coordinates.forEach(ls => total += lineLen(ls));
+  else return null;
+  return unit==='km' ? Math.round(total/1000*10000)/10000 : Math.round(total*100)/100;
+}
+function fcCalcArea(unit) {
+  const li = parseInt(document.getElementById('fc-layer').value);
+  const layer = state.layers[li]; if (!layer) { toast('Select a layer', 'error'); return; }
+  const fe = document.getElementById('fc-field-name');
+  if (!fe.value) fe.value = unit==='ha'?'area_ha':unit==='sqkm'?'area_sqkm':'area_sqm';
+  let ok=0, skip=0;
+  (layer.geojson.features||[]).forEach(f => {
+    const v = _calcGeomArea(f, unit);
+    if (v===null){skip++;return;} if(!f.properties)f.properties={}; f.properties[fe.value]=v; ok++;
+  });
+  if (!layer.fields[fe.value]) layer.fields[fe.value]='number';
+  updateLayerList(); renderTable(); updateStats();
+  toast(`Area (${unit}) written to "${fe.value}" for ${ok} features`+(skip?` (${skip} skipped — not polygon)`:''), ok?'success':'error');
+  document.getElementById('fieldcalc-backdrop').classList.remove('open');
+}
+function fcCalcLength(unit) {
+  const li = parseInt(document.getElementById('fc-layer').value);
+  const layer = state.layers[li]; if (!layer) { toast('Select a layer', 'error'); return; }
+  const fe = document.getElementById('fc-field-name');
+  if (!fe.value) fe.value = unit==='km'?'length_km':'length_m';
+  let ok=0, skip=0;
+  (layer.geojson.features||[]).forEach(f => {
+    const v = _calcGeomLength(f, unit);
+    if (v===null){skip++;return;} if(!f.properties)f.properties={}; f.properties[fe.value]=v; ok++;
+  });
+  if (!layer.fields[fe.value]) layer.fields[fe.value]='number';
+  updateLayerList(); renderTable(); updateStats();
+  toast(`Length (${unit}) written to "${fe.value}" for ${ok} features`+(skip?` (${skip} skipped — not line)`:''), ok?'success':'error');
+  document.getElementById('fieldcalc-backdrop').classList.remove('open');
 }
 
 function fcInsertField(f) {
