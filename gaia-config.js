@@ -31,13 +31,13 @@ const GAIA_CONFIG = {
 
   agol: {
     // Required — paste your registered app's Client ID here
-    clientId: '2TXWEhK9RGbU6KP4',
+    clientId: 'YOUR_CLIENT_ID',
 
     // Your ArcGIS Online organisation portal URL
     // Typical values:
     //   Public AGOL:  'https://www.arcgis.com'
     //   Enterprise:   'https://gis.your-org.com/portal'
-    portalUrl: 'https://umweltau.maps.arcgis.com/',
+    portalUrl: 'https://www.arcgis.com',
 
     // Redirect URI — must exactly match what you registered in AGOL
     // Usually your GitHub Pages URL with a trailing slash:

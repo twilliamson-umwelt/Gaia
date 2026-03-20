@@ -1,0 +1,56 @@
+GIS Inspector — Offline Library Instructions
+=============================================
+
+For fully offline use (no internet connection at all), download these files
+into this lib/ folder and update index.html accordingly.
+
+FILES TO DOWNLOAD:
+------------------
+
+1. Leaflet CSS
+   URL: https://unpkg.com/leaflet@1.9.4/dist/leaflet.css
+   Save as: lib/leaflet.css
+
+2. Leaflet JS
+   URL: https://unpkg.com/leaflet@1.9.4/dist/leaflet.js
+   Save as: lib/leaflet.js
+
+3. Proj4js
+   URL: https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js
+   Save as: lib/proj4.js
+
+4. JSZip
+   URL: https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js
+   Save as: lib/jszip.min.js
+
+5. Shapefile.js
+   URL: https://unpkg.com/shapefile@0.6.6/dist/shapefile.js
+   Save as: lib/shapefile.js
+
+6. toGeoJSON
+   URL: https://unpkg.com/@tmcw/togeojson@5.8.1/dist/togeojson.umd.js
+   Save as: lib/togeojson.js
+
+THEN UPDATE index.html:
+-----------------------
+Replace these lines near the top of index.html:
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <script src="https://unpkg.com/shapefile@0.6.6/dist/shapefile.js"></script>
+  <script src="https://unpkg.com/@tmcw/togeojson@5.8.1/dist/togeojson.umd.js"></script>
+
+With:
+
+  <link rel="stylesheet" href="lib/leaflet.css"/>
+  <script src="lib/leaflet.js"></script>
+  <script src="lib/proj4.js"></script>
+  <script src="lib/jszip.min.js"></script>
+  <script src="lib/shapefile.js"></script>
+  <script src="lib/togeojson.js"></script>
+
+NOTE: Basemap tiles (the background map imagery) require internet access.
+For fully offline basemaps, you would need a local tile server such as
+TileServer GL with downloaded MBTiles files.
