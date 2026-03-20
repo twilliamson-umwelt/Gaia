@@ -1321,6 +1321,8 @@ function setURLType(type) {
   setURLStatus('', '');
   // Auto-load catalogue on first open
   if (type === 'catalogue' && _catalogueData.length === 0) loadCatalogueCSV();
+  // Render AGOL pane
+  if (type === 'agol' && typeof _agolUpdateUI === 'function') _agolUpdateUI();
 }
 
 function setURLStatus(msg, type) {

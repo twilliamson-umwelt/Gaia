@@ -14,6 +14,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <link rel="stylesheet" href="css/gaia.css"/>
+<!-- Gaia config — fill in your AGOL Client ID here -->
+<script src="gaia-config.js"></script>
 </head>
 <body>
 <div id="app">
@@ -680,10 +682,16 @@
     <!-- Type tabs -->
     <div class="url-type-tabs">
       <div class="url-tab active" onclick="setURLType('catalogue')" id="tab-catalogue">📚 Catalogue</div>
+      <div class="url-tab" onclick="setURLType('agol')" id="tab-agol" style="color:#0074a8;">🌐 ArcGIS Online</div>
       <div class="url-tab" onclick="setURLType('arcgis')" id="tab-arcgis">ArcGIS REST</div>
       <div class="url-tab" onclick="setURLType('wms')" id="tab-wms">WMS</div>
       <div class="url-tab" onclick="setURLType('wmts')" id="tab-wmts">WMTS/XYZ</div>
       <div class="url-tab" onclick="setURLType('geojson')" id="tab-geojson">GeoJSON URL</div>
+    </div>
+
+    <!-- ArcGIS Online -->
+    <div class="service-type-group" id="grp-agol" style="padding:0;">
+      <div id="agol-pane" style="min-height:200px;"></div>
     </div>
 
     <!-- GeoJSON URL -->
@@ -1014,6 +1022,7 @@
 <div id="toast-container"></div>
 
 <script src="js/gaia.js"></script>
+<script src="js/agol.js"></script>
 <!-- MAP RIGHT-CLICK CONTEXT MENU -->
 <div id="map-ctx-menu" style="display:none;position:fixed;z-index:9800;background:#ffffff;border:1px solid var(--border);border-radius:7px;box-shadow:0 6px 24px rgba(0,0,0,0.18);min-width:200px;overflow:hidden;animation:wfadeIn 0.12s ease;">
   <div style="padding:5px 10px;font-family:var(--mono);font-size:9px;color:var(--text3);letter-spacing:1px;border-bottom:1px solid var(--border);background:#d8dfe6;">📍 MAP COORDINATES</div>
