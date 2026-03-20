@@ -53,6 +53,43 @@
   --sans:      'IBM Plex Sans', sans-serif;
 }
 
+/* ── DARK THEME ── */
+body.dark-mode {
+  --bg:        #111920;
+  --bg2:       #1a2530;
+  --bg3:       #223040;
+  --border:    #2e4055;
+  --border2:   #14b1e7;
+  --text:      #d8e8f0;
+  --text2:     #a0b8cc;
+  --text3:     #5a7a94;
+  --accent:    #14b1e7;
+  --accent2:   #0090c0;
+  --blue:      #14b1e7;
+  --teal:      #14b1e7;
+}
+body.dark-mode #header { background: linear-gradient(135deg, #080f14, #0d1e2c); }
+body.dark-mode th { background: #223040; color: #a0b8cc; }
+body.dark-mode th:hover { background: #2a3c50; }
+body.dark-mode tr:hover td { background: #1f2f3e; }
+body.dark-mode tr.selected td { background: rgba(0,255,255,0.07); }
+body.dark-mode .panel-header { background: #1e2e3e; color: #a0b8cc; }
+body.dark-mode .layer-item:hover { background: #1f2f3e; }
+body.dark-mode input, body.dark-mode select, body.dark-mode textarea {
+  background: #1a2530; color: var(--text); border-color: var(--border);
+}
+body.dark-mode .btn-ghost { color: var(--text2); border-color: var(--border); }
+body.dark-mode .btn-ghost:hover { background: var(--bg3); }
+body.dark-mode #color-picker-popup { background: #1a2530; border-color: var(--border); }
+body.dark-mode #color-picker-popup span, body.dark-mode #color-picker-popup div { color: var(--text2); }
+body.dark-mode .modal-backdrop > div,
+body.dark-mode #crs-modal,
+body.dark-mode #url-modal,
+body.dark-mode #sba-modal,
+body.dark-mode #feat-edit-modal { background: #1a2530; border-color: var(--border); color: var(--text); }
+body.dark-mode #about-backdrop > div { background: #1a2530; }
+body.dark-mode table { color: var(--text2); }
+
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; overflow: hidden; font-family: var(--sans); background: var(--bg); color: var(--text); font-size: 13px; }
 
@@ -624,8 +661,129 @@ select option { background: var(--bg2); }
     </div>
     <button class="btn btn-ghost btn-sm" onclick="if(confirm('Clear saved session? Layers will not restore next time.')) { clearSession(); }" title="Clear saved session" style="color:#ffaaaa;border-color:rgba(255,100,100,0.4);background:rgba(255,80,80,0.08);">🗑</button>
     <button class="btn btn-ghost btn-sm" onclick="showServerInstructions()" title="Serve locally via Python" style="color:#e8f4fb;border-color:rgba(255,255,255,0.3);background:rgba(255,255,255,0.08);">⚡ Local Server</button>
+    <button id="dark-mode-btn" onclick="toggleDarkMode()" title="Toggle dark/light mode" style="color:#e8f4fb;border-color:rgba(255,255,255,0.3);background:rgba(255,255,255,0.08);font-size:14px;padding:3px 8px;border:1px solid rgba(255,255,255,0.3);border-radius:5px;cursor:pointer;line-height:1;">🌙</button>
   </div>
 </header>
+
+<!-- CLASSIFY SYMBOLOGY MODAL -->
+<div id="classify-backdrop" class="modal-backdrop" onclick="if(event.target===this)this.classList.remove('open')">
+  <div style="background:var(--bg2);border-radius:10px;width:480px;max-width:calc(100vw - 32px);max-height:85vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">
+    <div style="background:linear-gradient(135deg,#0C2E44,#113c64);border-bottom:2px solid #14b1e7;padding:12px 18px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+      <span style="font-family:var(--mono);font-weight:700;font-size:12px;color:#e8f4fb;letter-spacing:1px;">🎨 Classify Symbology</span>
+      <span style="cursor:pointer;color:#7a96aa;font-size:16px;" onclick="document.getElementById('classify-backdrop').classList.remove('open')">✕</span>
+    </div>
+    <div style="overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:3px;">Layer</label>
+          <select id="cls-layer" style="width:100%;padding:5px 8px;font-family:var(--mono);font-size:10px;" onchange="onClsLayerChange()">
+            <option value="">— select layer —</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:3px;">Field</label>
+          <select id="cls-field" style="width:100%;padding:5px 8px;font-family:var(--mono);font-size:10px;" onchange="onClsFieldChange()">
+            <option value="">— select field —</option>
+          </select>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:3px;">Method</label>
+          <select id="cls-method" style="width:100%;padding:5px 8px;font-family:var(--mono);font-size:10px;" onchange="onClsMethodChange()">
+            <option value="unique">Unique Values</option>
+            <option value="equal">Equal Interval</option>
+            <option value="quantile">Quantile</option>
+          </select>
+        </div>
+        <div id="cls-classes-row">
+          <label style="font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:3px;">Classes</label>
+          <input id="cls-classes" type="number" min="2" max="12" value="5" style="width:100%;padding:5px 8px;font-family:var(--mono);font-size:10px;" onchange="previewClassify()"/>
+        </div>
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:3px;">Colour Ramp</label>
+          <select id="cls-ramp" style="width:100%;padding:5px 8px;font-family:var(--mono);font-size:10px;" onchange="previewClassify()">
+            <option value="blues">Blues</option>
+            <option value="greens">Greens</option>
+            <option value="reds">Reds</option>
+            <option value="oranges">Oranges</option>
+            <option value="purples">Purples</option>
+            <option value="bluered">Blue→Red</option>
+            <option value="greenred">Green→Red</option>
+            <option value="umwelt">Umwelt Teal</option>
+            <option value="spectral">Spectral</option>
+            <option value="viridis">Viridis</option>
+          </select>
+        </div>
+      </div>
+      <!-- Preview legend -->
+      <div id="cls-preview" style="border:1px solid var(--border);border-radius:6px;padding:10px;min-height:60px;background:var(--bg3);">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text3);text-align:center;">Select a layer and field to preview classes</div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button class="btn btn-ghost btn-sm" onclick="resetLayerSymbology()">Reset to Default</button>
+        <button class="btn btn-primary btn-sm" onclick="applyClassify()">Apply</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- FIELD CALCULATOR MODAL -->
+<div id="fieldcalc-backdrop" class="modal-backdrop" onclick="if(event.target===this)this.classList.remove('open')">
+  <div style="background:var(--bg2);border-radius:10px;width:500px;max-width:calc(100vw - 32px);max-height:85vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">
+    <div style="background:linear-gradient(135deg,#0C2E44,#113c64);border-bottom:2px solid #14b1e7;padding:12px 18px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
+      <span style="font-family:var(--mono);font-weight:700;font-size:12px;color:#e8f4fb;letter-spacing:1px;">ƒ Field Calculator</span>
+      <span style="cursor:pointer;color:#7a96aa;font-size:16px;" onclick="document.getElementById('fieldcalc-backdrop').classList.remove('open')">✕</span>
+    </div>
+    <div style="overflow-y:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:3px;">Layer</label>
+          <select id="fc-layer" style="width:100%;padding:5px 8px;font-family:var(--mono);font-size:10px;" onchange="onFCLayerChange()">
+            <option value="">— select layer —</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:3px;">Output Field Name</label>
+          <input id="fc-field-name" type="text" placeholder="e.g. area_ha" style="width:100%;padding:5px 8px;font-family:var(--mono);font-size:10px;"/>
+        </div>
+      </div>
+      <!-- Field list for insertion -->
+      <div>
+        <label style="font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">Available Fields <span style="opacity:0.6;">(click to insert)</span></label>
+        <div id="fc-field-list" style="display:flex;flex-wrap:wrap;gap:4px;min-height:28px;padding:4px;border:1px solid var(--border);border-radius:4px;background:var(--bg3);"></div>
+      </div>
+      <!-- Expression -->
+      <div>
+        <label style="font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:3px;">Expression</label>
+        <textarea id="fc-expr" rows="3" placeholder='Examples:&#10;[area] / 10000&#10;[first_name] + " " + [last_name]&#10;Math.round([value] * 100) / 100'
+          style="width:100%;padding:6px 8px;font-family:var(--mono);font-size:11px;resize:vertical;border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--text);"
+          oninput="fcPreview()"></textarea>
+      </div>
+      <!-- Quick operators -->
+      <div style="display:flex;flex-wrap:wrap;gap:4px;">
+        <span style="font-family:var(--mono);font-size:9px;color:var(--text3);align-self:center;margin-right:2px;">Insert:</span>
+        <button class="btn btn-ghost btn-sm" onclick="fcInsert(' + ')" style="font-size:10px;padding:2px 6px;">+</button>
+        <button class="btn btn-ghost btn-sm" onclick="fcInsert(' - ')" style="font-size:10px;padding:2px 6px;">−</button>
+        <button class="btn btn-ghost btn-sm" onclick="fcInsert(' * ')" style="font-size:10px;padding:2px 6px;">×</button>
+        <button class="btn btn-ghost btn-sm" onclick="fcInsert(' / ')" style="font-size:10px;padding:2px 6px;">÷</button>
+        <button class="btn btn-ghost btn-sm" onclick="fcInsert('Math.round(')" style="font-size:10px;padding:2px 6px;">round()</button>
+        <button class="btn btn-ghost btn-sm" onclick="fcInsert('Math.abs(')" style="font-size:10px;padding:2px 6px;">abs()</button>
+        <button class="btn btn-ghost btn-sm" onclick="fcInsert('parseFloat(')" style="font-size:10px;padding:2px 6px;">toNum()</button>
+        <button class="btn btn-ghost btn-sm" onclick="fcInsert('String(')" style="font-size:10px;padding:2px 6px;">toStr()</button>
+        <button class="btn btn-ghost btn-sm" onclick="fcInsert('.toUpperCase()')" style="font-size:10px;padding:2px 6px;">UPPER</button>
+        <button class="btn btn-ghost btn-sm" onclick="fcInsert('.toLowerCase()')" style="font-size:10px;padding:2px 6px;">lower</button>
+      </div>
+      <!-- Preview -->
+      <div id="fc-preview" style="font-family:var(--mono);font-size:10px;color:var(--text3);padding:6px 8px;background:var(--bg3);border-radius:4px;border:1px solid var(--border);min-height:28px;"></div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center;">
+        <span id="fc-status" style="font-family:var(--mono);font-size:9px;color:var(--text3);flex:1;"></span>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('fieldcalc-backdrop').classList.remove('open')">Cancel</button>
+        <button class="btn btn-primary btn-sm" onclick="runFieldCalc()">Calculate</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- LOCAL SERVER INSTRUCTIONS MODAL -->
 <div id="server-modal-backdrop" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10000;align-items:center;justify-content:center;">
@@ -762,11 +920,20 @@ select option { background: var(--bg2); }
       <button class="btn btn-ghost btn-full" onclick="toggleExportPanel()" id="export-open-btn" style="font-size:10px;">
         ↓ Export
       </button>
+      <button class="btn btn-ghost btn-full" onclick="exportMapPNG()" style="font-size:10px;" title="Export current map view as PNG">
+        🖼 Export Map PNG
+      </button>
       <button class="btn btn-ghost btn-full" onclick="toggleCreatePanel()" id="create-open-btn" style="font-size:10px;">
         ✚ Create Features
       </button>
       <button class="btn btn-ghost btn-full" onclick="toggleWidgetPanel()" id="widgets-open-btn" style="font-size:10px;">
         ⚙ Widgets
+      </button>
+      <button class="btn btn-ghost btn-full" onclick="openClassifyPanel()" id="classify-open-btn" style="font-size:10px;" title="Thematic / classified symbology">
+        🎨 Classify Symbology
+      </button>
+      <button class="btn btn-ghost btn-full" onclick="openFieldCalcPanel()" id="fieldcalc-open-btn" style="font-size:10px;" title="Field Calculator">
+        ƒ Field Calculator
       </button>
     </div>
     <!-- Layer Stats -->
@@ -5236,6 +5403,457 @@ function _updateColorPreview(fillColor, outlineColor, noFill) {
   const box = document.getElementById('color-preview-box'); if (!box) return;
   box.style.background = noFill ? 'transparent repeating-linear-gradient(45deg,#ccc,#ccc 4px,transparent 4px,transparent 8px)' : fillColor;
   box.style.borderColor = outlineColor;
+}
+
+function toggleDarkMode() {
+  const isDark = document.body.classList.toggle('dark-mode');
+  document.getElementById('dark-mode-btn').textContent = isDark ? '☀️' : '🌙';
+  try { localStorage.setItem('gaia_dark_mode', isDark ? '1' : '0'); } catch(e) {}
+}
+
+// Restore dark mode preference on load
+(function() {
+  try {
+    if (localStorage.getItem('gaia_dark_mode') === '1') {
+      document.body.classList.add('dark-mode');
+      document.addEventListener('DOMContentLoaded', () => {
+        const btn = document.getElementById('dark-mode-btn');
+        if (btn) btn.textContent = '☀️';
+      });
+    }
+  } catch(e) {}
+})();
+
+// ══════════════════════════════════════════════════
+// EXPORT MAP AS PNG
+// ══════════════════════════════════════════════════
+function exportMapPNG() {
+  toast('Preparing PNG export…', 'info');
+  // Use leaflet-image-like approach via html2canvas or direct canvas capture
+  // Leaflet renders to canvas tiles — we gather them
+  const mapEl = document.getElementById('map');
+  if (!mapEl) { toast('Map element not found', 'error'); return; }
+
+  // Collect all tile canvases and draw to an output canvas
+  const rect = mapEl.getBoundingClientRect();
+  const W = Math.round(rect.width), H = Math.round(rect.height);
+  const out = document.createElement('canvas');
+  out.width = W; out.height = H;
+  const ctx = out.getContext('2d');
+
+  // Fill background
+  ctx.fillStyle = document.body.classList.contains('dark-mode') ? '#111920' : '#f4f6f8';
+  ctx.fillRect(0, 0, W, H);
+
+  // Draw tile images
+  const imgs = mapEl.querySelectorAll('.leaflet-tile-container img, .leaflet-tile-pane img');
+  let drawn = 0, total = imgs.length;
+
+  function tryFinish() {
+    drawn++;
+    if (drawn < total) return;
+    // Draw SVG overlay (vector features) via foreignObject
+    const svgEl = mapEl.querySelector('.leaflet-overlay-pane svg');
+    if (svgEl) {
+      const svgStr = new XMLSerializer().serializeToString(svgEl);
+      const svgBlob = new Blob([svgStr], {type:'image/svg+xml;charset=utf-8'});
+      const svgUrl = URL.createObjectURL(svgBlob);
+      const svgImg = new Image();
+      svgImg.onload = () => {
+        const svgRect = svgEl.getBoundingClientRect();
+        ctx.drawImage(svgImg, svgRect.left - rect.left, svgRect.top - rect.top);
+        URL.revokeObjectURL(svgUrl);
+        // Add scale bar text
+        const scaleText = document.getElementById('scale-display')?.textContent || '';
+        const zoom = state.map ? Math.round(state.map.getZoom()) : '';
+        ctx.fillStyle = 'rgba(255,255,255,0.75)';
+        ctx.fillRect(8, H - 30, 180, 22);
+        ctx.fillStyle = '#1c2b3a';
+        ctx.font = '11px IBM Plex Mono, monospace';
+        ctx.fillText(`Scale 1:${scaleText}  |  Zoom ${zoom}`, 14, H - 14);
+        finishExport();
+      };
+      svgImg.onerror = finishExport;
+      svgImg.src = svgUrl;
+    } else {
+      finishExport();
+    }
+  }
+
+  function finishExport() {
+    // Add Gaia watermark
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillRect(W - 90, H - 22, 82, 16);
+    ctx.fillStyle = '#0074a8';
+    ctx.font = '10px IBM Plex Mono, monospace';
+    ctx.fillText('Gaia v1.0', W - 84, H - 9);
+
+    out.toBlob(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'gaia-map-' + new Date().toISOString().slice(0,10) + '.png';
+      a.click();
+      URL.revokeObjectURL(url);
+      toast('Map exported as PNG', 'success');
+    });
+  }
+
+  if (total === 0) { tryFinish(); return; }
+
+  imgs.forEach(img => {
+    if (!img.complete || img.naturalWidth === 0) {
+      img.onload = () => tryFinish();
+      img.onerror = () => tryFinish();
+      return;
+    }
+    const imgRect = img.getBoundingClientRect();
+    try {
+      ctx.drawImage(img, imgRect.left - rect.left, imgRect.top - rect.top, imgRect.width, imgRect.height);
+    } catch(e) {} // cross-origin tiles silently skipped
+    tryFinish();
+  });
+}
+
+// ══════════════════════════════════════════════════
+// CLASSIFY SYMBOLOGY
+// ══════════════════════════════════════════════════
+const _COLOR_RAMPS = {
+  blues:    ['#deebf7','#9ecae1','#4292c6','#2171b5','#084594'],
+  greens:   ['#e5f5e0','#a1d99b','#41ab5d','#238b45','#005a32'],
+  reds:     ['#fee5d9','#fcae91','#fb6a4a','#de2d26','#a50f15'],
+  oranges:  ['#feedde','#fdbe85','#fd8d3c','#e6550d','#a63603'],
+  purples:  ['#f2f0f7','#cbc9e2','#9e9ac8','#756bb1','#54278f'],
+  bluered:  ['#2166ac','#74add1','#e0f3f8','#f46d43','#a50026'],
+  greenred: ['#1a9850','#91cf60','#ffffbf','#fc8d59','#d73027'],
+  umwelt:   ['#d0eaf7','#74c0de','#14b1e7','#0074a8','#003d5c'],
+  spectral: ['#3288bd','#99d594','#e6f598','#fee08b','#d53e4f'],
+  viridis:  ['#440154','#31688e','#35b779','#fde725','#21908c'],
+};
+
+let _classifyState = { breaks: [], colors: [], fieldType: 'string' };
+
+function openClassifyPanel() {
+  const bd = document.getElementById('classify-backdrop');
+  bd.classList.add('open');
+  // Populate layer list
+  const sel = document.getElementById('cls-layer');
+  sel.innerHTML = '<option value="">— select layer —</option>';
+  state.layers.forEach((l, i) => {
+    if (!l.isTile) {
+      const opt = document.createElement('option');
+      opt.value = i; opt.textContent = l.name;
+      if (i === state.activeLayerIndex) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  });
+  onClsLayerChange();
+}
+
+function onClsLayerChange() {
+  const layerIdx = parseInt(document.getElementById('cls-layer').value);
+  const layer = state.layers[layerIdx];
+  const fsel = document.getElementById('cls-field');
+  fsel.innerHTML = '<option value="">— select field —</option>';
+  if (!layer) return;
+  Object.keys(layer.fields).forEach(f => {
+    const opt = document.createElement('option'); opt.value = f; opt.textContent = f;
+    fsel.appendChild(opt);
+  });
+  onClsMethodChange();
+}
+
+function onClsMethodChange() {
+  const method = document.getElementById('cls-method').value;
+  document.getElementById('cls-classes-row').style.display = method === 'unique' ? 'none' : '';
+  previewClassify();
+}
+
+function onClsFieldChange() { previewClassify(); }
+
+function _interpolateColor(c1, c2, t) {
+  const hex = h => { const n = parseInt(h.slice(1), 16); return [(n>>16)&255,(n>>8)&255,n&255]; };
+  const [r1,g1,b1] = hex(c1), [r2,g2,b2] = hex(c2);
+  const r = Math.round(r1 + (r2-r1)*t), g = Math.round(g1 + (g2-g1)*t), b = Math.round(b1 + (b2-b1)*t);
+  return '#' + [r,g,b].map(x=>x.toString(16).padStart(2,'0')).join('');
+}
+
+function _getRampColor(rampName, t) {
+  const stops = _COLOR_RAMPS[rampName] || _COLOR_RAMPS.blues;
+  const n = stops.length - 1;
+  const pos = t * n;
+  const lo = Math.min(Math.floor(pos), n-1), hi = Math.min(lo + 1, n);
+  return _interpolateColor(stops[lo], stops[hi], pos - lo);
+}
+
+function previewClassify() {
+  const layerIdx = parseInt(document.getElementById('cls-layer').value);
+  const field = document.getElementById('cls-field').value;
+  const method = document.getElementById('cls-method').value;
+  const nClasses = parseInt(document.getElementById('cls-classes').value) || 5;
+  const ramp = document.getElementById('cls-ramp').value;
+  const layer = state.layers[layerIdx];
+  const preview = document.getElementById('cls-preview');
+
+  if (!layer || !field) {
+    preview.innerHTML = '<div style="font-family:var(--mono);font-size:9px;color:var(--text3);text-align:center;">Select a layer and field to preview</div>';
+    return;
+  }
+
+  const vals = (layer.geojson.features || []).map(f => f.properties?.[field]);
+  const classes = _buildClasses(vals, method, nClasses, ramp);
+  _classifyState = { classes, layerIdx, field, method };
+
+  const swatches = classes.map(c =>
+    `<div style="display:flex;align-items:center;gap:6px;padding:3px 0;">
+      <div style="width:28px;height:14px;border-radius:3px;background:${c.color};border:1px solid rgba(0,0,0,0.1);flex-shrink:0;"></div>
+      <span style="font-family:var(--mono);font-size:9px;color:var(--text2);">${c.label}</span>
+      <span style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-left:auto;">${c.count} feature${c.count!==1?'s':''}</span>
+    </div>`).join('');
+  preview.innerHTML = `<div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">${field}</div>${swatches}`;
+}
+
+function _buildClasses(vals, method, n, ramp) {
+  if (method === 'unique') {
+    const unique = [...new Set(vals.filter(v => v != null).map(String))].sort();
+    return unique.slice(0, 20).map((v, i) => ({
+      label: v,
+      color: _getRampColor(ramp, unique.length <= 1 ? 0.5 : i / (unique.length - 1)),
+      test: fv => String(fv) === v,
+      count: vals.filter(x => String(x) === v).length
+    }));
+  }
+  const nums = vals.filter(v => v != null && !isNaN(parseFloat(v))).map(Number).sort((a,b) => a-b);
+  if (!nums.length) return [];
+  const min = nums[0], max = nums[nums.length-1];
+  if (min === max) {
+    return [{ label: String(min), color: _getRampColor(ramp, 0.5), test: () => true, count: nums.length }];
+  }
+  let breaks = [];
+  if (method === 'equal') {
+    const step = (max - min) / n;
+    for (let i = 0; i <= n; i++) breaks.push(min + i * step);
+  } else { // quantile
+    for (let i = 0; i <= n; i++) {
+      const idx = Math.min(Math.round(i * (nums.length-1) / n), nums.length-1);
+      breaks.push(nums[idx]);
+    }
+    breaks = [...new Set(breaks)];
+  }
+  const classes = [];
+  for (let i = 0; i < breaks.length - 1; i++) {
+    const lo = breaks[i], hi = breaks[i+1];
+    const isLast = i === breaks.length - 2;
+    const color = _getRampColor(ramp, classes.length / Math.max(1, breaks.length - 2));
+    const fmt = v => Number.isInteger(v) ? v : v.toFixed(2);
+    classes.push({
+      label: `${fmt(lo)} – ${fmt(hi)}`,
+      color,
+      test: fv => { const n2 = parseFloat(fv); return !isNaN(n2) && n2 >= lo && (isLast ? n2 <= hi : n2 < hi); },
+      count: nums.filter(x => x >= lo && (isLast ? x <= hi : x < hi)).length
+    });
+  }
+  return classes;
+}
+
+function applyClassify() {
+  const { classes, layerIdx, field } = _classifyState;
+  if (!classes || !classes.length || layerIdx == null) { toast('Build a preview first', 'error'); return; }
+  const layer = state.layers[layerIdx];
+  if (!layer) return;
+
+  // Rebuild leaflet layer with per-feature colours
+  if (layer.leafletLayer) state.map.removeLayer(layer.leafletLayer);
+
+  const isLine = layer.geomType?.includes('Line');
+  const newLeaflet = L.geoJSON(layer.geojson, {
+    style: feat => {
+      const val = feat.properties?.[field];
+      const cls = classes.find(c => c.test(val));
+      const col = cls ? cls.color : '#888888';
+      return { color: col, fillColor: col, fillOpacity: 0.4, weight: isLine ? 2.5 : 1.5, opacity: 0.9 };
+    },
+    pointToLayer: (feat, latlng) => {
+      const val = feat.properties?.[field];
+      const cls = classes.find(c => c.test(val));
+      const col = cls ? cls.color : '#888888';
+      const ic = _makePointIcon(col, '#fff', false, layer.pointShape || 'circle', 14);
+      return L.marker(latlng, { icon: ic });
+    },
+    onEachFeature: (feat, sub) => {
+      const fi = (layer.geojson.features || []).indexOf(feat);
+      sub.on('click', e => {
+        state.activeLayerIndex = layerIdx;
+        state.selectedFeatureIndices = new Set([fi]);
+        state.selectedFeatureIndex = fi;
+        showFeaturePopup(state.map, e.latlng, feat, layer.color);
+        updateLayerList(); updateSelectionCount(); refreshMapSelection(layerIdx); renderTable();
+        e.originalEvent._featureClicked = true; L.DomEvent.stopPropagation(e);
+      });
+    }
+  });
+  newLeaflet.addTo(state.map);
+  layer.leafletLayer = newLeaflet;
+  layer.classified = true;
+  layer.classifyField = field;
+  layer.classifyClasses = classes;
+  refreshLayerZOrder();
+
+  document.getElementById('classify-backdrop').classList.remove('open');
+  toast(`Classified "${layer.name}" by "${field}" — ${classes.length} classes`, 'success');
+}
+
+function resetLayerSymbology() {
+  const layerIdx = parseInt(document.getElementById('cls-layer').value);
+  const layer = state.layers[layerIdx];
+  if (!layer) return;
+  layer.classified = false;
+  _applySymbologyToLeaflet(layer);
+  // Rebuild properly via full re-add
+  if (layer.leafletLayer) state.map.removeLayer(layer.leafletLayer);
+  const color = layer.color;
+  const isLine = layer.geomType?.includes('Line');
+  const newL = L.geoJSON(layer.geojson, {
+    style: () => ({ color: layer.outlineColor||color, fillColor: layer.fillColor||color, fillOpacity: layer.noFill?0:0.25, weight: isLine?2.5:1.5, opacity:0.9 }),
+    pointToLayer: (feat,latlng) => { const ic=_makePointIcon(layer.fillColor||color,layer.outlineColor||'#fff',layer.noFill||false,layer.pointShape||'circle',14);return L.marker(latlng,{icon:ic}); },
+    onEachFeature: (feat, sub) => {
+      const fi=(layer.geojson.features||[]).indexOf(feat);
+      sub.on('click',e=>{
+        state.activeLayerIndex=layerIdx;state.selectedFeatureIndices=new Set([fi]);state.selectedFeatureIndex=fi;
+        showFeaturePopup(state.map,e.latlng,feat,color);
+        updateLayerList();updateSelectionCount();refreshMapSelection(layerIdx);renderTable();
+        e.originalEvent._featureClicked=true;L.DomEvent.stopPropagation(e);
+      });
+    }
+  });
+  newL.addTo(state.map);
+  layer.leafletLayer = newL;
+  refreshLayerZOrder();
+  toast('Symbology reset to default', 'success');
+}
+
+// ══════════════════════════════════════════════════
+// FIELD CALCULATOR
+// ══════════════════════════════════════════════════
+function openFieldCalcPanel() {
+  const bd = document.getElementById('fieldcalc-backdrop');
+  bd.classList.add('open');
+  const sel = document.getElementById('fc-layer');
+  sel.innerHTML = '<option value="">— select layer —</option>';
+  state.layers.forEach((l, i) => {
+    if (!l.isTile) {
+      const opt = document.createElement('option');
+      opt.value = i; opt.textContent = l.name;
+      if (i === state.activeLayerIndex) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  });
+  onFCLayerChange();
+}
+
+function onFCLayerChange() {
+  const layerIdx = parseInt(document.getElementById('fc-layer').value);
+  const layer = state.layers[layerIdx];
+  const listEl = document.getElementById('fc-field-list');
+  listEl.innerHTML = '';
+  if (!layer) return;
+  Object.keys(layer.fields).forEach(f => {
+    const chip = document.createElement('span');
+    chip.style.cssText = 'font-family:var(--mono);font-size:9px;padding:2px 6px;background:var(--bg3);border:1px solid var(--border);border-radius:3px;cursor:pointer;color:var(--teal);';
+    chip.textContent = f;
+    chip.title = 'Click to insert [' + f + ']';
+    chip.onclick = () => fcInsertField(f);
+    listEl.appendChild(chip);
+  });
+  fcPreview();
+}
+
+function fcInsertField(f) {
+  const ta = document.getElementById('fc-expr');
+  const start = ta.selectionStart, end = ta.selectionEnd;
+  const ins = '[' + f + ']';
+  ta.value = ta.value.slice(0, start) + ins + ta.value.slice(end);
+  ta.selectionStart = ta.selectionEnd = start + ins.length;
+  ta.focus();
+  fcPreview();
+}
+
+function fcInsert(s) {
+  const ta = document.getElementById('fc-expr');
+  const start = ta.selectionStart, end = ta.selectionEnd;
+  ta.value = ta.value.slice(0, start) + s + ta.value.slice(end);
+  ta.selectionStart = ta.selectionEnd = start + s.length;
+  ta.focus();
+  fcPreview();
+}
+
+function _evalFCExpr(expr, props) {
+  // Replace [fieldname] with the actual value (string-escaped or numeric)
+  let js = expr.replace(/\[([^\]]+)\]/g, (_, f) => {
+    const v = props?.[f];
+    if (v === null || v === undefined) return 'null';
+    if (typeof v === 'number') return String(v);
+    return JSON.stringify(String(v));
+  });
+  // Safe eval in a restricted context
+  // eslint-disable-next-line no-new-func
+  return new Function('Math', 'String', 'Number', 'parseFloat', 'parseInt', 'return (' + js + ')')(Math, String, Number, parseFloat, parseInt);
+}
+
+function fcPreview() {
+  const layerIdx = parseInt(document.getElementById('fc-layer').value);
+  const layer = state.layers[layerIdx];
+  const expr = document.getElementById('fc-expr').value.trim();
+  const prevEl = document.getElementById('fc-preview');
+  if (!layer || !expr) { prevEl.textContent = ''; return; }
+  const feat = (layer.geojson.features || [])[0];
+  if (!feat) { prevEl.textContent = 'No features in layer'; return; }
+  try {
+    const result = _evalFCExpr(expr, feat.properties || {});
+    prevEl.innerHTML = `<span style="color:var(--text3);">Preview (row 1):</span> <span style="color:var(--teal);">${escHtml(String(result))}</span>`;
+    document.getElementById('fc-status').textContent = '';
+  } catch(e) {
+    prevEl.innerHTML = `<span style="color:var(--red);">Error: ${escHtml(e.message)}</span>`;
+  }
+}
+
+function runFieldCalc() {
+  const layerIdx = parseInt(document.getElementById('fc-layer').value);
+  const layer = state.layers[layerIdx];
+  const expr = document.getElementById('fc-expr').value.trim();
+  const fieldName = document.getElementById('fc-field-name').value.trim();
+  const statusEl = document.getElementById('fc-status');
+
+  if (!layer) { toast('Select a layer', 'error'); return; }
+  if (!fieldName) { toast('Enter a field name', 'error'); return; }
+  if (!expr) { toast('Enter an expression', 'error'); return; }
+
+  let errors = 0, ok = 0;
+  (layer.geojson.features || []).forEach(feat => {
+    try {
+      const result = _evalFCExpr(expr, feat.properties || {});
+      if (!feat.properties) feat.properties = {};
+      feat.properties[fieldName] = result;
+      ok++;
+    } catch(e) { errors++; }
+  });
+
+  // Update layer fields registry
+  if (!layer.fields[fieldName]) {
+    // infer type
+    const sample = (layer.geojson.features || [])[0]?.properties?.[fieldName];
+    layer.fields[fieldName] = typeof sample === 'number' ? 'number' : typeof sample === 'boolean' ? 'bool' : 'string';
+  }
+
+  if (errors > 0) {
+    statusEl.textContent = `Done with ${errors} error(s) — check expression`;
+  } else {
+    statusEl.textContent = '';
+  }
+
+  updateLayerList(); renderTable(); updateStats();
+  toast(`Field "${fieldName}" calculated for ${ok} feature${ok!==1?'s':''}`+(errors?` (${errors} errors)`:''), errors ? 'info' : 'success');
+  document.getElementById('fieldcalc-backdrop').classList.remove('open');
 }
 
 function showServerInstructions() {
