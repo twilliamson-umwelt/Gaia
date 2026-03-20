@@ -7,11 +7,16 @@
 //  SETUP: edit gaia-config.js — see comments there.
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ── Resolve config (falls back gracefully if gaia-config.js missing) ───────
-const AGOL_CONFIG = (typeof GAIA_CONFIG !== 'undefined' && GAIA_CONFIG.agol)
+// ── Resolve config ──────────────────────────────────────────────────────
+// Reads from gaia-config.js if present, otherwise uses built-in defaults below.
+const _AGOL_DEFAULTS = {
+  clientId:    '2TXWEhK9RGbU6KP4',
+  portalUrl:   'https://umweltau.maps.arcgis.com',
+  redirectUri: window.location.origin + window.location.pathname,
+};
+const AGOL_CONFIG = (typeof GAIA_CONFIG !== 'undefined' && GAIA_CONFIG.agol && GAIA_CONFIG.agol.clientId)
   ? GAIA_CONFIG.agol
-  : { clientId: '', portalUrl: 'https://www.arcgis.com',
-      redirectUri: window.location.href.split('?')[0].split('#')[0] };
+  : _AGOL_DEFAULTS;
 
 // ── Module state ─────────────────────────────────────────────────────────
 const agol = {
@@ -151,15 +156,30 @@ function _agolUpdateUI() {
   const pane = document.getElementById('agol-pane');
   if (!pane) return;
 
+  // If no token in memory, check sessionStorage (tab may have just been opened)
   if (!agol.token) {
+    try {
+      const stored = sessionStorage.getItem('gaia_agol_token');
+      if (stored) {
+        const d = JSON.parse(stored);
+        if (d.expires > Date.now() + 60000) {
+          agol.token   = d.token;
+          agol.expires = d.expires;
+          // Fetch username then re-render
+          pane.innerHTML = `<div style="padding:20px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--text3);">Connecting…</div>`;
+          _agolFetchSelf().then(() => _agolUpdateUI());
+          return;
+        }
+      }
+    } catch(e) {}
+    // No valid token — show sign-in
     pane.innerHTML = _agolRenderSignIn();
     return;
   }
 
-  // If we have a token but no username yet, self-fetch is in flight — show spinner
+  // Have token but no username yet — still loading
   if (!agol.username) {
-    pane.innerHTML = `<div style="padding:20px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--text3);">
-      Signing in… <span style="animation:spin 1s linear infinite;display:inline-block;">⟳</span></div>`;
+    pane.innerHTML = `<div style="padding:20px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--text3);">Connecting…</div>`;
     return;
   }
 
@@ -746,6 +766,15 @@ function _agolShowResults(html) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-//  Bootstrap
+//  Bootstrap — called when AGOL tab is opened (not on page load)
+//  to avoid race conditions with the pane div not existing yet.
+//  We DO still need to check for the OAuth callback hash on page load though.
 // ─────────────────────────────────────────────────────────────────────────
-document.addEventListener('DOMContentLoaded', agolInit);
+document.addEventListener('DOMContentLoaded', function() {
+  // Only process the OAuth hash redirect — don't render the pane yet
+  // (the pane div doesn't exist until the URL modal is opened)
+  const hash = window.location.hash;
+  if (hash && hash.includes('access_token')) {
+    agolInit();
+  }
+});

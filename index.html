@@ -820,24 +820,6 @@
         <button class="btn btn-ghost btn-sm" onclick="loadCatalogueCSV()" title="Reload catalogue.csv">↻ Reload</button>
       </div>
 
-      <!-- Drop zone for catalogue.csv — always visible, subtle -->
-      <div id="cat-drop-zone"
-        ondragover="catDropZoneDragOver(event)"
-        ondragleave="catDropZoneDragLeave(event)"
-        ondrop="catDropZoneDrop(event)"
-        onclick="document.getElementById('cat-file-input').click()"
-        style="border:1.5px dashed var(--border);border-radius:6px;padding:7px 10px;margin-bottom:8px;
-               display:flex;align-items:center;gap:8px;cursor:pointer;transition:all 0.15s;
-               background:transparent;">
-        <span style="font-size:14px;opacity:0.5;">📋</span>
-        <div>
-          <div style="font-family:var(--mono);font-size:9px;color:var(--text3);">Drop <code>catalogue.csv</code> here or <span style="color:var(--teal);text-decoration:underline;">browse</span></div>
-          <div style="font-family:var(--mono);font-size:8px;color:var(--text3);opacity:0.7;margin-top:1px;">Columns: Group, Name, URL</div>
-        </div>
-        <input type="file" id="cat-file-input" accept=".csv" style="display:none;"
-          onchange="loadCatalogueFromFilePicker(event)"/>
-      </div>
-
       <!-- Catalogue tree -->
       <div id="cat-tree" style="display:none;">
         <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
@@ -850,15 +832,10 @@
 
       <div id="cat-empty" style="display:none;padding:4px 0;">
         <div style="font-family:var(--mono);font-size:9px;color:var(--text3);line-height:1.6;">
-          No catalogue loaded yet — drop a CSV above or browse for one.<br>
-          If placing <code>catalogue.csv</code> beside <code>index.html</code>, serve via
+          No catalogue loaded. Place <code>catalogue.csv</code> beside <code>index.html</code> and serve via
           <code>python -m http.server</code> for auto-load.
         </div>
-        <div id="cat-file-fallback" style="display:none;margin-top:6px;">
-          <div style="font-family:var(--mono);font-size:8px;color:var(--orange);">
-            ⚠ Auto-load blocked — use the drop zone above to load manually.
-          </div>
-        </div>
+        <div id="cat-file-fallback" style="display:none;"></div>
       </div>
     </div>
 
@@ -1022,7 +999,7 @@
 <div id="toast-container"></div>
 
 <script src="js/gaia.js?v=cd8387a0"></script>
-<script src="js/agol.js?v=5d723ca8"></script>
+<script src="js/agol.js?v=800312f5"></script>
 <!-- MAP RIGHT-CLICK CONTEXT MENU -->
 <div id="map-ctx-menu" style="display:none;position:fixed;z-index:9800;background:#ffffff;border:1px solid var(--border);border-radius:7px;box-shadow:0 6px 24px rgba(0,0,0,0.18);min-width:200px;overflow:hidden;animation:wfadeIn 0.12s ease;">
   <div style="padding:5px 10px;font-family:var(--mono);font-size:9px;color:var(--text3);letter-spacing:1px;border-bottom:1px solid var(--border);background:#d8dfe6;">📍 MAP COORDINATES</div>
