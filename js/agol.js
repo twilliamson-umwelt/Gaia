@@ -494,6 +494,7 @@ async function _agolQueryItems() {
 
   // ── My Content — folder browse ─────────────────────────
   if (agol.scope === 'mine' && agol.currentFolder) {
+    if (!agol.username || agol.username === '_authenticated_') await _agolFetchSelf();
     const data = await _agolPost(
       `/sharing/rest/content/users/${agol.username}/${agol.currentFolder}`
     );
@@ -503,6 +504,13 @@ async function _agolQueryItems() {
 
   // ── My Content — root ──────────────────────────────────
   if (agol.scope === 'mine') {
+    // If self-fetch only gave us the placeholder, retry before building the query
+    if (!agol.username || agol.username === '_authenticated_') {
+      await _agolFetchSelf();
+      if (!agol.username || agol.username === '_authenticated_') {
+        throw new Error('Could not resolve your ArcGIS Online username. Please sign out and back in.');
+      }
+    }
     const q = `${typeFilter} AND owner:${agol.username}${searchFilter}`;
     const searchData = await _agolPost('/sharing/rest/search', {
       q, num: agol.pageSize, start: agol.searchStart,
