@@ -4064,6 +4064,56 @@ function exportMapPNG() {
     svgImg.src = dataURI;
   }
 
+  // ── Marker pane (DivIcon point layers) ───────────────────────────────────
+  // Leaflet DivIcon markers live in .leaflet-marker-pane as <div> elements
+  // containing inline SVG — they are NOT in the overlay SVG or in img tags.
+  // We capture each marker's position and inner SVG and draw it on canvas.
+  function drawMarkers(cb) {
+    const markerEls = Array.from(
+      mapEl.querySelectorAll('.leaflet-marker-pane .leaflet-marker-icon')
+    );
+    if (!markerEls.length) { cb(); return; }
+
+    // Collect all marker SVGs and their positions
+    const jobs = markerEls.map(function(el) {
+      const mr  = el.getBoundingClientRect();
+      const x   = Math.round(mr.left - rect.left);
+      const y   = Math.round(mr.top  - rect.top);
+      const w   = Math.round(mr.width)  || 14;
+      const h   = Math.round(mr.height) || 14;
+      // The DivIcon html is the element's innerHTML (an <svg> string)
+      const svgContent = el.innerHTML.trim();
+      return { x, y, w, h, svgContent };
+    }).filter(j => j.svgContent && j.x + j.w > 0 && j.y + j.h > 0 && j.x < W && j.y < H);
+
+    if (!jobs.length) { cb(); return; }
+
+    // Draw each marker by loading its SVG as a data URI image
+    let remaining = jobs.length;
+    function done() { if (--remaining <= 0) cb(); }
+
+    jobs.forEach(function(job) {
+      // Wrap in a proper SVG document if it isn't one already
+      let svgStr = job.svgContent;
+      if (!svgStr.startsWith('<svg')) {
+        svgStr = `<svg xmlns="http://www.w3.org/2000/svg" width="${job.w}" height="${job.h}">${svgStr}</svg>`;
+      } else {
+        // Ensure xmlns is present
+        svgStr = svgStr.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+      }
+      const dataURI = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgStr);
+      const img = new Image();
+      const guard = setTimeout(function() { img.onload = img.onerror = null; done(); }, 1000);
+      img.onload = function() {
+        clearTimeout(guard);
+        try { ctx.drawImage(img, job.x, OY + job.y, job.w, job.h); } catch(e) {}
+        done();
+      };
+      img.onerror = function() { clearTimeout(guard); done(); };
+      img.src = dataURI;
+    });
+  }
+
   // ── Legend ────────────────────────────────────────────────────────────────
   function drawLegend() {
     const layers = (state.layers || []).filter(l => l && !l.isTile && l.visible);
@@ -4203,7 +4253,7 @@ function exportMapPNG() {
     }
   }
 
-  drawVectors(finaliseAndSave);
+  drawVectors(function() { drawMarkers(finaliseAndSave); });
 }
 
 // ══════════════════════════════════════════════════

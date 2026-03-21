@@ -153,39 +153,45 @@ function _agolOpenModalOnReturn() {
   }
 }
 
-/** Resolve username, orgId, fullName via /community/self */
+/** Resolve username, orgId, fullName via /community/self.
+ *  AGOL identity endpoints require GET + token in query string (not POST).
+ *  Only data/search/query endpoints accept POST.
+ */
 async function _agolFetchSelf() {
   if (!agol.token) return;
+  const portal = AGOL_CONFIG.portalUrl.replace(/\/+$/, '');
   try {
-    const data = await _agolPost('/sharing/rest/community/self');
+    // GET — token in query string, NOT a POST body
+    const selfUrl = portal + '/sharing/rest/community/self?f=json&token=' + encodeURIComponent(agol.token);
+    const resp = await fetch(selfUrl);
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
     agol.username = data.username;
     agol.orgId    = data.orgId;
     agol.fullName = data.fullName || data.username;
     if (data.orgId) {
       try {
-        const org = await _agolPost('/sharing/rest/portals/' + data.orgId);
-        agol.orgName = org.name || '';
-      } catch(e) { /* org name is cosmetic, ignore */ }
+        const orgUrl = portal + '/sharing/rest/portals/' + data.orgId + '?f=json&token=' + encodeURIComponent(agol.token);
+        const orgResp = await fetch(orgUrl);
+        const orgData = await orgResp.json();
+        agol.orgName = orgData.name || '';
+      } catch(e) { /* org name is cosmetic */ }
     }
   } catch(e) {
     console.warn('AGOL /community/self failed:', e.message);
-    // Fallback: try to decode username from the JWT token payload
-    // AGOL tokens are not standard JWTs but some org tokens include a username claim
+    // Fallback 1: try to decode username from AGOL's JWT-like token
     if (!agol.username) {
       try {
         const parts = agol.token.split('.');
         if (parts.length === 3) {
-          const payload = JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
-          if (payload.username) {
-            agol.username = payload.username;
-            agol.fullName = payload.username;
-          }
+          const pad = parts[1].replace(/-/g,'+').replace(/_/g,'/');
+          const payload = JSON.parse(atob(pad + '='.repeat((4 - pad.length % 4) % 4)));
+          if (payload.username) { agol.username = payload.username; agol.fullName = payload.username; }
         }
-      } catch(e2) { /* token not a JWT — that's fine */ }
+      } catch(e2) {}
     }
-    // If we still have no username, set a placeholder so the UI doesn't
-    // get stuck on "Connecting..." — the user is logged in, they just
-    // can't display their name yet
+    // Fallback 2: set placeholder so UI isn't stuck — content fetch will retry
     if (!agol.username) {
       agol.username = '_authenticated_';
       agol.fullName = 'ArcGIS Online User';
@@ -398,7 +404,11 @@ async function agolSetGroup(groupId) {
 
 async function _agolLoadGroups() {
   try {
-    const data = await _agolPost('/sharing/rest/community/self');
+    const portal = AGOL_CONFIG.portalUrl.replace(/\/+$/, '');
+    const selfUrl = portal + '/sharing/rest/community/self?f=json&token=' + encodeURIComponent(agol.token);
+    const resp = await fetch(selfUrl);
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error.message);
     agol.groups = (data.groups || []).sort((a, b) => a.title.localeCompare(b.title));
     if (agol.groups.length && !agol.currentGroup) {
       agol.currentGroup = agol.groups[0].id;
