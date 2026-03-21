@@ -105,15 +105,24 @@ async function agolInit() {
     if (token) {
       agol.token   = token;
       agol.expires = Date.now() + parseInt(expires || 7200) * 1000;
+      // AGOL includes username directly in the redirect hash — grab it now
+      // so we never need to call /community/self just to get the username
+      const hashUsername = p.get('username');
+      if (hashUsername) {
+        agol.username = hashUsername;
+        agol.fullName = hashUsername;
+      }
       try {
         sessionStorage.setItem('gaia_agol_token', JSON.stringify({
-          token: agol.token, expires: agol.expires,
+          token:    agol.token,
+          expires:  agol.expires,
+          username: agol.username || '',
         }));
       } catch(e) {}
       // Clean hash from URL
       history.replaceState(null, '', window.location.pathname + window.location.search);
-      // Fetch user info — if it fails, still proceed (token may still work for queries)
-      await _agolFetchSelf();
+      // Fetch full name / org name in background (non-blocking)
+      _agolFetchSelf();
       // Open the URL modal on the AGOL tab so the user lands back in the right place
       _agolOpenModalOnReturn();
       return;
@@ -127,7 +136,13 @@ async function agolInit() {
       if (d.expires > Date.now() + 60000) {
         agol.token   = d.token;
         agol.expires = d.expires;
-        await _agolFetchSelf();
+        // Restore username from storage so content can load immediately
+        if (d.username) {
+          agol.username = d.username;
+          agol.fullName = d.username;
+        }
+        // Fetch full name / org details in background
+        _agolFetchSelf();
         // Don't open the modal — user didn't click, just refreshed the page
         return;
       }
@@ -153,23 +168,32 @@ function _agolOpenModalOnReturn() {
   }
 }
 
-/** Resolve username, orgId, fullName via /community/self.
- *  AGOL identity endpoints require GET + token in query string (not POST).
- *  Only data/search/query endpoints accept POST.
+/** Enrich profile (fullName, orgName) via GET /community/self.
+ *  Username is already set from the OAuth hash — this just adds display name.
+ *  Never blocks content loading.
  */
 async function _agolFetchSelf() {
   if (!agol.token) return;
   const portal = AGOL_CONFIG.portalUrl.replace(/\/+$/, '');
   try {
-    // GET — token in query string, NOT a POST body
     const selfUrl = portal + '/sharing/rest/community/self?f=json&token=' + encodeURIComponent(agol.token);
     const resp = await fetch(selfUrl);
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     const data = await resp.json();
     if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+    // Always update from the API response — it's the most accurate
     agol.username = data.username;
     agol.orgId    = data.orgId;
     agol.fullName = data.fullName || data.username;
+    // Save enriched username back to sessionStorage
+    try {
+      const stored = sessionStorage.getItem('gaia_agol_token');
+      if (stored) {
+        const d = JSON.parse(stored);
+        d.username = agol.username;
+        sessionStorage.setItem('gaia_agol_token', JSON.stringify(d));
+      }
+    } catch(e) {}
     if (data.orgId) {
       try {
         const orgUrl = portal + '/sharing/rest/portals/' + data.orgId + '?f=json&token=' + encodeURIComponent(agol.token);
@@ -179,23 +203,8 @@ async function _agolFetchSelf() {
       } catch(e) { /* org name is cosmetic */ }
     }
   } catch(e) {
-    console.warn('AGOL /community/self failed:', e.message);
-    // Fallback 1: try to decode username from AGOL's JWT-like token
-    if (!agol.username) {
-      try {
-        const parts = agol.token.split('.');
-        if (parts.length === 3) {
-          const pad = parts[1].replace(/-/g,'+').replace(/_/g,'/');
-          const payload = JSON.parse(atob(pad + '='.repeat((4 - pad.length % 4) % 4)));
-          if (payload.username) { agol.username = payload.username; agol.fullName = payload.username; }
-        }
-      } catch(e2) {}
-    }
-    // Fallback 2: set placeholder so UI isn't stuck — content fetch will retry
-    if (!agol.username) {
-      agol.username = '_authenticated_';
-      agol.fullName = 'ArcGIS Online User';
-    }
+    // Self-fetch failed — not fatal. Username may already be set from OAuth hash.
+    console.warn('AGOL /community/self:', e.message);
   }
 }
 
@@ -504,7 +513,7 @@ async function _agolQueryItems() {
 
   // ── My Content — folder browse ─────────────────────────
   if (agol.scope === 'mine' && agol.currentFolder) {
-    if (!agol.username || agol.username === '_authenticated_') await _agolFetchSelf();
+    if (!agol.username) throw new Error('Not signed in.');
     const data = await _agolPost(
       `/sharing/rest/content/users/${agol.username}/${agol.currentFolder}`
     );
@@ -514,12 +523,8 @@ async function _agolQueryItems() {
 
   // ── My Content — root ──────────────────────────────────
   if (agol.scope === 'mine') {
-    // If self-fetch only gave us the placeholder, retry before building the query
-    if (!agol.username || agol.username === '_authenticated_') {
-      await _agolFetchSelf();
-      if (!agol.username || agol.username === '_authenticated_') {
-        throw new Error('Could not resolve your ArcGIS Online username. Please sign out and back in.');
-      }
+    if (!agol.username) {
+      throw new Error('Not signed in. Please sign out and sign in again.');
     }
     const q = `${typeFilter} AND owner:${agol.username}${searchFilter}`;
     const searchData = await _agolPost('/sharing/rest/search', {

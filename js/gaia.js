@@ -4074,36 +4074,38 @@ function exportMapPNG() {
     );
     if (!markerEls.length) { cb(); return; }
 
-    // Collect all marker SVGs and their positions
     const jobs = markerEls.map(function(el) {
-      const mr  = el.getBoundingClientRect();
-      const x   = Math.round(mr.left - rect.left);
-      const y   = Math.round(mr.top  - rect.top);
-      const w   = Math.round(mr.width)  || 14;
-      const h   = Math.round(mr.height) || 14;
-      // The DivIcon html is the element's innerHTML (an <svg> string)
-      const svgContent = el.innerHTML.trim();
-      return { x, y, w, h, svgContent };
-    }).filter(j => j.svgContent && j.x + j.w > 0 && j.y + j.h > 0 && j.x < W && j.y < H);
+      const mr = el.getBoundingClientRect();
+      const x  = Math.round(mr.left - rect.left);
+      const y  = Math.round(mr.top  - rect.top);
+      const w  = Math.round(mr.width)  || 14;
+      const h  = Math.round(mr.height) || 14;
+
+      // innerHTML is the raw SVG string from _makePointIcon
+      // It already has xmlns so we must NOT add another one
+      let svgStr = el.innerHTML.trim();
+      if (!svgStr) return null;
+
+      // Strip any duplicate xmlns attrs before wrapping
+      svgStr = svgStr.replace(/\s+xmlns="[^"]*"/g, '');
+      // Ensure exactly one correct xmlns
+      if (svgStr.startsWith('<svg')) {
+        svgStr = svgStr.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+      } else {
+        svgStr = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">${svgStr}</svg>`;
+      }
+      return { x, y, w, h, svgStr };
+    }).filter(j => j && j.svgStr && j.x + j.w > 0 && j.y + j.h > 0 && j.x < W && j.y < H);
 
     if (!jobs.length) { cb(); return; }
 
-    // Draw each marker by loading its SVG as a data URI image
     let remaining = jobs.length;
     function done() { if (--remaining <= 0) cb(); }
 
     jobs.forEach(function(job) {
-      // Wrap in a proper SVG document if it isn't one already
-      let svgStr = job.svgContent;
-      if (!svgStr.startsWith('<svg')) {
-        svgStr = `<svg xmlns="http://www.w3.org/2000/svg" width="${job.w}" height="${job.h}">${svgStr}</svg>`;
-      } else {
-        // Ensure xmlns is present
-        svgStr = svgStr.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
-      }
-      const dataURI = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgStr);
-      const img = new Image();
-      const guard = setTimeout(function() { img.onload = img.onerror = null; done(); }, 1000);
+      const dataURI = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(job.svgStr);
+      const img   = new Image();
+      const guard = setTimeout(function() { img.onload = img.onerror = null; done(); }, 1500);
       img.onload = function() {
         clearTimeout(guard);
         try { ctx.drawImage(img, job.x, OY + job.y, job.w, job.h); } catch(e) {}
