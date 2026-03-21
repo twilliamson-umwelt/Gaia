@@ -33,8 +33,6 @@ const agol = {
   scope:        'mine',  // 'mine' | 'org' | 'groups'
   currentFolder: null,
   currentFolderName: null,
-  groups:       [],
-  currentGroup: null,
 };
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -99,7 +97,7 @@ function agolSignOut() {
   agol.fullName = null; agol.orgName = null;
   agol.currentFolder = null; agol.currentFolderName = null;
   agol.searchQuery = ''; agol.searchStart = 1;
-  agol.scope = 'mine'; agol.groups = []; agol.currentGroup = null;
+  agol.scope = 'mine';
   try { sessionStorage.removeItem('gaia_agol_token'); } catch(e) {}
   _agolUpdateUI();
   toast('Signed out of ArcGIS Online', 'info');
@@ -307,7 +305,7 @@ function _agolRenderBrowser() {
     }
   }
 
-  const scopeLabels = { mine:'👤 My Content', org:'🏢 Organisation', groups:'👥 Groups' };
+  const scopeLabels = { mine:'👤 My Content', org:'🏢 Organisation' };
   const scopeTabs = Object.keys(scopeLabels).map(s => `
     <div onclick="agolSetScope('${s}')"
       style="padding:7px 12px;font-family:var(--mono);font-size:9px;cursor:pointer;white-space:nowrap;
@@ -321,22 +319,7 @@ function _agolRenderBrowser() {
       ${scopeLabels[s]}
     </div>`).join('');
 
-  const placeholder = agol.scope === 'mine' ? 'Search my content…'
-    : agol.scope === 'org' ? 'Search organisation…' : 'Search group…';
-
-  // Group picker (only shown when scope = groups)
-  const groupPicker = agol.scope === 'groups' ? `
-    <div style="padding:5px 8px;border-bottom:1px solid var(--border);">
-      <select id="agol-group-select" onchange="agolSetGroup(this.value)"
-        style="width:100%;padding:4px 8px;font-family:var(--mono);font-size:10px;
-               border:1px solid var(--border);border-radius:4px;background:var(--bg2);color:var(--text);">
-        ${agol.groups.length
-          ? agol.groups.map(g =>
-              `<option value="${escHtml(g.id)}" ${g.id===agol.currentGroup?'selected':''}>
-                ${escHtml(g.title)}</option>`).join('')
-          : '<option value="">Loading groups…</option>'}
-      </select>
-    </div>` : '';
+  const placeholder = agol.scope === 'mine' ? 'Search my content…' : 'Search organisation…';
 
   return `
     <!-- User bar -->
@@ -360,8 +343,6 @@ function _agolRenderBrowser() {
     <div style="display:flex;border-bottom:1px solid var(--border);background:var(--bg2);">
       ${scopeTabs}
     </div>
-
-    ${groupPicker}
 
     <!-- Search -->
     <div style="padding:6px 8px;border-bottom:1px solid var(--border);display:flex;gap:6px;">
@@ -402,36 +383,11 @@ async function agolSetScope(scope) {
   agol.searchStart = 1;
   agol.currentFolder = null;
   agol.currentFolderName = null;
-  // For groups, load group list if not already loaded
-  if (scope === 'groups' && !agol.groups.length) {
-    await _agolLoadGroups();
-  }
-  // Re-render browser (updates active tab highlight + group picker visibility)
   const pane = document.getElementById('agol-pane');
   if (pane) pane.innerHTML = _agolRenderBrowser();
   _agolFetchContent();
 }
 
-async function agolSetGroup(groupId) {
-  agol.currentGroup = groupId;
-  agol.searchStart = 1;
-  if (groupId) _agolFetchContent();
-}
-
-async function _agolLoadGroups() {
-  try {
-    const selfUrl = _agolApiBase() + '/sharing/rest/community/self?f=json&token=' + encodeURIComponent(agol.token);
-    const resp = await fetch(selfUrl);
-    const data = await resp.json();
-    if (data.error) throw new Error(data.error.message);
-    agol.groups = (data.groups || []).sort((a, b) => a.title.localeCompare(b.title));
-    if (agol.groups.length && !agol.currentGroup) {
-      agol.currentGroup = agol.groups[0].id;
-    }
-  } catch(e) {
-    console.warn('AGOL groups fetch failed:', e.message);
-  }
-}
 
 function agolSearch() {
   const el = document.getElementById('agol-search-input');
@@ -560,22 +516,6 @@ async function _agolQueryItems() {
     const searchData = await _agolPost('/sharing/rest/search', {
       q, num: agol.pageSize, start: agol.searchStart,
       sortField:'modified', sortOrder:'desc',
-    });
-    agol.searchTotal = searchData.total || 0;
-    return { results: searchData.results || [], total: agol.searchTotal };
-  }
-
-  // ── Groups ──────────────────────────────────────────────
-  if (agol.scope === 'groups') {
-    if (!agol.currentGroup) return { results: [], total: 0 };
-    const q = `${typeFilter}${searchFilter}`;
-    const searchData = await _agolPost('/sharing/rest/search', {
-      q,
-      groups:   agol.currentGroup,
-      num:      agol.pageSize,
-      start:    agol.searchStart,
-      sortField:'modified',
-      sortOrder:'desc',
     });
     agol.searchTotal = searchData.total || 0;
     return { results: searchData.results || [], total: agol.searchTotal };

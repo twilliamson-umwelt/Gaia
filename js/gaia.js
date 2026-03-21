@@ -115,6 +115,20 @@ window.addEventListener('DOMContentLoaded', () => {
   state.map.on('zoomend moveend', updateScaleDisplay);
   setTimeout(updateScaleDisplay, 100); // initial value after map tiles settle
 
+  // ── Guided empty state ──────────────────────────────────────────────────
+  // Show when no layers, hide the moment a layer is added.
+  // Wire drag-and-drop on the overlay itself so it feels like the whole map
+  // is a drop target.
+  const mes = document.getElementById('map-empty-state');
+  if (mes) {
+    mes.addEventListener('dragover',  function(e) { e.preventDefault(); mes.classList.add('mes-dragging'); });
+    mes.addEventListener('dragleave', function()  { mes.classList.remove('mes-dragging'); });
+    mes.addEventListener('drop',      function(e) {
+      mes.classList.remove('mes-dragging');
+      handleDrop(e); // delegate to existing drop handler
+    });
+  }
+
   // Right-click context menu
   state.map.on('contextmenu', function(e) {
     e.originalEvent.preventDefault();
@@ -587,6 +601,7 @@ function addLayer(geojson, name, sourceCRS, format) {
   setTimeout(refreshLayerZOrder, 50);
   state.layers.push({ geojson, name, sourceCRS, format, color, fields, geomType, leafletLayer, visible:true });
   updateLayerList(); updateExportLayerList(); updateSBLLayerList(); setActiveLayer(idx);
+  _updateEmptyState();
   try { state.map.fitBounds(leafletLayer.getBounds(), {padding:[30,30]}); } catch(e){}
 }
 
@@ -740,6 +755,7 @@ function removeLayer(i) {
   state.layers.splice(i,1);
   if(state.activeLayerIndex>=state.layers.length) state.activeLayerIndex=state.layers.length-1;
   updateLayerList(); updateExportLayerList();
+  _updateEmptyState();
   if(state.layers.length) setActiveLayer(state.activeLayerIndex); else clearStats();
 }
 
@@ -773,7 +789,6 @@ function updateStats() {
   const gt=layer.geomType||'–';
   const shortGT=gt.includes('Polygon')?'POLY':gt.includes('Line')?'LINE':gt.includes('Point')?'POINT':gt.substring(0,5).toUpperCase();
   document.getElementById('stat-geomtype').textContent=shortGT;
-  document.getElementById('stat-crs').textContent=layer.sourceCRS.replace('EPSG:','');
   try {
     const b=layer.leafletLayer.getBounds();
     document.getElementById('bbox-section').style.display='block';
@@ -786,7 +801,10 @@ function updateStats() {
 }
 
 function clearStats() {
-  ['stat-features','stat-fields','stat-geomtype','stat-crs'].forEach(id=>document.getElementById(id).textContent='–');
+  ['stat-features','stat-fields','stat-geomtype'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = '–';
+  });
   document.getElementById('bbox-section').style.display='none';
   document.getElementById('stats-section').style.display='none';
   document.getElementById('attr-strip-table-wrap').innerHTML='<div class="empty-state">Select a layer to view attributes</div>';
@@ -810,7 +828,7 @@ function updateLegend() {
   const isPoint   = geomType.includes('Point');
   const isLine    = geomType.includes('Line');
 
-  // If layer has classify classes, show classified legend
+  // If layer has classify classes, show classified legend with live view counts
   if (layer.classified && layer.classifyClasses && layer.classifyClasses.length) {
     const field = layer.classifyField || '';
     const rows = layer.classifyClasses.map(c => {
@@ -822,11 +840,12 @@ function updateLegend() {
       return `<div style="display:flex;align-items:center;gap:6px;padding:2px 0;">
         ${swatch}
         <span style="font-family:var(--mono);font-size:9px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${escHtml(String(c.label))}</span>
-        <span style="font-family:var(--mono);font-size:8px;color:var(--text3);">${c.count}</span>
       </div>`;
     }).join('');
     legendBody.innerHTML = `
-      <div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">${escHtml(field)}</div>
+      <div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">
+        <span>${escHtml(field)}</span>
+      </div>
       ${rows}`;
     return;
   }
@@ -863,7 +882,20 @@ function updateLegend() {
     </div>`;
 }
 
-// ── ATTRIBUTE TABLE ──
+// ── EMPTY STATE VISIBILITY ───────────────────────────────────────────────────
+function _updateEmptyState() {
+  const mes = document.getElementById('map-empty-state');
+  if (!mes) return;
+  const hasLayers = state.layers.some(l => l != null);
+  if (hasLayers) {
+    mes.classList.add('mes-hidden');
+  } else {
+    mes.classList.remove('mes-hidden');
+    mes.style.opacity = '';
+  }
+}
+
+
 function renderTable() {
   const layer=state.layers[state.activeLayerIndex];
   if(!layer) return;
@@ -3213,6 +3245,7 @@ function clearSession() {
   document.getElementById('attr-strip-table-wrap').innerHTML = '<div class="empty-state">Select a layer to view attributes</div>';
   document.getElementById('table-count').textContent = '';
   showFeatureInspector(null);
+  _updateEmptyState();
   toast('Session cleared — all layers removed', 'info');
 }
 
@@ -3943,6 +3976,59 @@ function toggleDarkMode() {
 // EXPORT MAP AS PNG
 // ══════════════════════════════════════════════════
 function exportMapPNG() {
+  // ── Step 0: Ask for title before doing any canvas work ───────────────────
+  const now0   = new Date();
+  const dd0    = String(now0.getDate()).padStart(2, '0');
+  const mm0    = String(now0.getMonth() + 1).padStart(2, '0');
+  const yyyy0  = now0.getFullYear();
+  const defaultTitle = 'Gaia Export — ' + dd0 + '-' + mm0 + '-' + yyyy0;
+
+  // Build a small modal
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:10600;display:flex;align-items:center;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:var(--bg2);border-radius:10px;width:380px;max-width:calc(100vw - 32px);
+                box-shadow:0 8px 40px rgba(0,0,0,0.3);overflow:hidden;">
+      <div style="background:linear-gradient(135deg,#0C2E44,#113c64);border-bottom:2px solid #14b1e7;
+                  padding:12px 16px;">
+        <div style="font-family:var(--mono);font-weight:700;font-size:11px;color:#e8f4fb;">
+          🖼 Export Map as PNG
+        </div>
+      </div>
+      <div style="padding:16px;">
+        <label style="font-family:var(--mono);font-size:9px;color:var(--text3);
+                      text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:5px;">
+          Map Title
+        </label>
+        <input id="png-title-input" type="text"
+          value="${defaultTitle}"
+          style="width:100%;box-sizing:border-box;padding:7px 10px;font-family:var(--mono);
+                 font-size:11px;border:1px solid var(--border);border-radius:5px;
+                 background:var(--bg);color:var(--text);outline:none;"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();document.getElementById('png-export-go').click();}
+                     if(event.key==='Escape'){this.closest('div[style*=fixed]').remove();}"/>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+          <button class="btn btn-ghost btn-sm" onclick="this.closest('div[style*=fixed]').remove()"
+            style="font-size:10px;">Cancel</button>
+          <button id="png-export-go" class="btn btn-primary btn-sm"
+            style="font-size:10px;"
+            onclick="
+              var t=document.getElementById('png-title-input').value.trim()||'${defaultTitle}';
+              this.closest('div[style*=fixed]').remove();
+              _exportMapPNGWithTitle(t);
+            ">Export PNG</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  // Select all text so user can immediately type a replacement
+  setTimeout(function() {
+    const inp = document.getElementById('png-title-input');
+    if (inp) { inp.focus(); inp.select(); }
+  }, 50);
+}
+
+function _exportMapPNGWithTitle(userTitle) {
   toast('Preparing PNG export…', 'info');
 
   const mapEl = document.getElementById('map');
@@ -3977,7 +4063,7 @@ function exportMapPNG() {
   ctx.fillStyle = '#14b1e7';
   ctx.fillRect(0, TITLE_H - 2, W, 2);
 
-  const titleText = 'Gaia Export \u2014 ' + dd + '-' + mm + '-' + yyyy;
+  const titleText = userTitle;
   ctx.fillStyle = '#e8f4fb';
   ctx.font = 'bold 13px "IBM Plex Mono", monospace';
   const tw = ctx.measureText(titleText).width;
