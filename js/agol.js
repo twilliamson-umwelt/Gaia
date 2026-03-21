@@ -110,9 +110,12 @@ async function agolInit() {
           token: agol.token, expires: agol.expires,
         }));
       } catch(e) {}
+      // Clean hash from URL
       history.replaceState(null, '', window.location.pathname + window.location.search);
+      // Fetch user info — if it fails, still proceed (token may still work for queries)
       await _agolFetchSelf();
-      _agolUpdateUI();
+      // Open the URL modal on the AGOL tab so the user lands back in the right place
+      _agolOpenModalOnReturn();
       return;
     }
   }
@@ -125,13 +128,29 @@ async function agolInit() {
         agol.token   = d.token;
         agol.expires = d.expires;
         await _agolFetchSelf();
-        _agolUpdateUI();
+        // Don't open the modal — user didn't click, just refreshed the page
         return;
       }
     }
   } catch(e) {}
+}
 
-  _agolUpdateUI();
+/** After OAuth redirect: open the modal on the AGOL tab */
+function _agolOpenModalOnReturn() {
+  // Open the URL modal if it isn't already open
+  const bd = document.getElementById('url-backdrop');
+  if (bd && !bd.classList.contains('open')) {
+    bd.classList.add('open');
+  }
+  // Switch to AGOL tab
+  if (typeof setURLType === 'function') {
+    setURLType('agol');
+  } else {
+    // setURLType not yet available (script load order) — defer
+    setTimeout(function() {
+      if (typeof setURLType === 'function') setURLType('agol');
+    }, 100);
+  }
 }
 
 /** Resolve username, orgId, fullName via /community/self */
@@ -146,10 +165,31 @@ async function _agolFetchSelf() {
       try {
         const org = await _agolPost('/sharing/rest/portals/' + data.orgId);
         agol.orgName = org.name || '';
-      } catch(e) { /* org name is cosmetic */ }
+      } catch(e) { /* org name is cosmetic, ignore */ }
     }
   } catch(e) {
-    console.warn('AGOL self-fetch failed:', e.message);
+    console.warn('AGOL /community/self failed:', e.message);
+    // Fallback: try to decode username from the JWT token payload
+    // AGOL tokens are not standard JWTs but some org tokens include a username claim
+    if (!agol.username) {
+      try {
+        const parts = agol.token.split('.');
+        if (parts.length === 3) {
+          const payload = JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
+          if (payload.username) {
+            agol.username = payload.username;
+            agol.fullName = payload.username;
+          }
+        }
+      } catch(e2) { /* token not a JWT — that's fine */ }
+    }
+    // If we still have no username, set a placeholder so the UI doesn't
+    // get stuck on "Connecting..." — the user is logged in, they just
+    // can't display their name yet
+    if (!agol.username) {
+      agol.username = '_authenticated_';
+      agol.fullName = 'ArcGIS Online User';
+    }
   }
 }
 
@@ -181,9 +221,16 @@ function _agolUpdateUI() {
     return;
   }
 
-  // Have token but no username yet — still loading
+  // Have token but no username yet — do a synchronous self-fetch attempt then render
   if (!agol.username) {
     pane.innerHTML = `<div style="padding:20px;text-align:center;font-family:var(--mono);font-size:10px;color:var(--text3);">Connecting…</div>`;
+    _agolFetchSelf().then(function() {
+      // After fetch (success or failure, username is now set), re-render
+      const p = document.getElementById('agol-pane');
+      if (!p) return;
+      p.innerHTML = _agolRenderBrowser();
+      _agolFetchContent();
+    });
     return;
   }
 

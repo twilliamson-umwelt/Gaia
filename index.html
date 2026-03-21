@@ -176,28 +176,7 @@
 </div>
 
 <!-- LOCAL SERVER INSTRUCTIONS MODAL -->
-<div id="server-modal-backdrop" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10000;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:10px;padding:24px 28px;max-width:480px;width:calc(100% - 40px);box-shadow:0 8px 32px rgba(0,0,0,0.25);">
-    <div style="font-family:var(--mono);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:#2c3e50;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;">
-      ⚡ Run Gaia as a Local Web Server
-      <span style="cursor:pointer;opacity:0.5;font-size:15px;" onclick="document.getElementById('server-modal-backdrop').style.display='none'">✕</span>
-    </div>
-    <p style="font-family:var(--mono);font-size:10px;color:var(--text3);margin:0 0 10px;">Running Gaia via a local web server (instead of double-clicking the file) unlocks <strong>auto-loading of catalogue.csv</strong> and avoids browser security restrictions on local files.</p>
-    <div style="background:#1c2b3a;border-radius:6px;padding:10px 14px;margin-bottom:12px;">
-      <div style="font-family:var(--mono);font-size:10px;color:#7a96aa;margin-bottom:4px;">Step 1 — Open a terminal and navigate to the Gaia folder:</div>
-      <div style="font-family:var(--mono);font-size:11px;color:#e8f4fb;">cd /path/to/gis-inspector</div>
-    </div>
-    <div style="background:#1c2b3a;border-radius:6px;padding:10px 14px;margin-bottom:12px;">
-      <div style="font-family:var(--mono);font-size:10px;color:#7a96aa;margin-bottom:4px;">Step 2 — Start the Python web server:</div>
-      <div style="font-family:var(--mono);font-size:11px;color:#e8f4fb;">python -m http.server 8080</div>
-    </div>
-    <div style="background:#1c2b3a;border-radius:6px;padding:10px 14px;margin-bottom:16px;">
-      <div style="font-family:var(--mono);font-size:10px;color:#7a96aa;margin-bottom:4px;">Step 3 — Open in your browser:</div>
-      <div style="font-family:var(--mono);font-size:11px;color:#14b1e7;">http://localhost:8080/index.html</div>
-    </div>
-    <p style="font-family:var(--mono);font-size:9px;color:var(--text3);margin:0;">Python 3 is pre-installed on most systems. On Windows, try <code>py -m http.server 8080</code>. Keep the terminal open while using Gaia.</p>
-  </div>
-</div>
+
 
 <div id="body">
 
@@ -415,7 +394,7 @@
       <h3 style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#0074a8;margin:0 0 6px;border-bottom:1px solid #d8dfe6;padding-bottom:4px;">Add Layer from URL</h3>
       <p style="margin:0 0 10px;">Click the <strong>+ Add Layer from URL</strong> button to connect to:</p>
       <ul style="margin:0 0 12px;padding-left:18px;">
-        <li><strong>Catalogue</strong> — your team's service list (CSV with Group, Name, URL). Drop a catalogue.csv onto the drop zone or browse for it. Loads at current map extent.</li>
+        <li><strong>Catalogue</strong> — your team's service list (CSV with Group, Name, URL). Place <code>catalogue.csv</code> alongside <code>index.html</code> for auto-load.</li>
         <li><strong>ArcGIS REST</strong> — FeatureServer or MapServer layer URLs</li>
         <li><strong>WMS / WMTS / XYZ</strong> — raster tile services</li>
         <li><strong>GeoJSON URL</strong> — any endpoint returning GeoJSON</li>
@@ -451,7 +430,6 @@
         <li><strong>Create Features</strong> — digitise new point, line, or polygon layers</li>
         <li><strong>Right-click map</strong> — copy coordinates in multiple formats, add a point</li>
         <li><strong>CRS</strong> — change the coordinate display in the bottom bar</li>
-        <li><strong>⚡ Local Server</strong> — instructions for running Gaia via Python's HTTP server, which enables auto-loading of catalogue.csv</li>
       </ul>
 
       <div style="margin-top:16px;padding:10px 12px;background:#edf0f3;border-radius:6px;font-size:10px;color:#607d8b;line-height:1.6;">
@@ -997,8 +975,8 @@
 <!-- TOAST CONTAINER -->
 <div id="toast-container"></div>
 
-<script src="js/gaia.js?v=fe8916fb"></script>
-<script src="js/agol.js?v=67fbc57a"></script>
+<script src="js/gaia.js?v=e79fc18a"></script>
+<script src="js/agol.js?v=7c286841"></script>
 <!-- MAP RIGHT-CLICK CONTEXT MENU -->
 <div id="map-ctx-menu" style="display:none;position:fixed;z-index:9800;background:#ffffff;border:1px solid var(--border);border-radius:7px;box-shadow:0 6px 24px rgba(0,0,0,0.18);min-width:200px;overflow:hidden;animation:wfadeIn 0.12s ease;">
   <div style="padding:5px 10px;font-family:var(--mono);font-size:9px;color:var(--text3);letter-spacing:1px;border-bottom:1px solid var(--border);background:#d8dfe6;">📍 MAP COORDINATES</div>

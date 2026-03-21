@@ -3951,107 +3951,259 @@ function exportMapPNG() {
   const W = Math.round(rect.width), H = Math.round(rect.height);
   const isDark = document.body.classList.contains('dark-mode');
 
-  // ── Step 1: try to draw tile images onto a test canvas ─────────────────
-  // If ANY cross-origin tile is drawn the canvas becomes tainted.
-  // We use a separate "tile canvas" and check if it's tainted before compositing.
-  const tileCanvas = document.createElement('canvas');
-  tileCanvas.width = W; tileCanvas.height = H;
-  const tCtx = tileCanvas.getContext('2d');
-  tCtx.fillStyle = isDark ? '#111920' : '#e8ecf0';
-  tCtx.fillRect(0, 0, W, H);
-
-  let tainted = false;
-  const imgs = Array.from(mapEl.querySelectorAll('.leaflet-pane img'));
-  imgs.forEach(function(img) {
-    if (!img.complete || !img.naturalWidth) return;
-    const ir = img.getBoundingClientRect();
-    try {
-      tCtx.drawImage(img, ir.left - rect.left, ir.top - rect.top, ir.width, ir.height);
-    } catch(e) { tainted = true; }
-  });
-  // Quick taint probe
-  if (!tainted) {
-    try { tileCanvas.toDataURL(); } catch(e) { tainted = true; }
-  }
-
-  // ── Step 2: build the final canvas ─────────────────────────────────────
   const out = document.createElement('canvas');
   out.width = W; out.height = H;
   const ctx = out.getContext('2d');
 
-  // Background
-  ctx.fillStyle = isDark ? '#111920' : '#e8ecf0';
+  // ── Step 1: Background ──────────────────────────────────────────────────
+  ctx.fillStyle = isDark ? '#111920' : '#f0f2f4';
   ctx.fillRect(0, 0, W, H);
 
-  // Only composite tiles if not tainted
+  // ── Step 2: Basemap tiles ───────────────────────────────────────────────
+  // Leaflet tile <img> elements live inside .leaflet-tile-pane.
+  // Their CSS transform moves them relative to the pane, which is itself
+  // positioned relative to the map container. We must account for both.
+  let tainted = false;
+
+  // Find all tile panes and draw their images
+  const tilePanes = Array.from(mapEl.querySelectorAll(
+    '.leaflet-tile-pane .leaflet-layer, .leaflet-tile-pane'
+  ));
+
+  // Simpler: just grab every img inside leaflet-map-pane
+  const allImgs = Array.from(mapEl.querySelectorAll('.leaflet-map-pane img'));
+  allImgs.forEach(function(img) {
+    if (!img.complete || !img.naturalWidth) return;
+    // getBoundingClientRect gives us position relative to viewport
+    const ir = img.getBoundingClientRect();
+    const x = Math.round(ir.left - rect.left);
+    const y = Math.round(ir.top  - rect.top);
+    const w = Math.round(ir.width);
+    const h = Math.round(ir.height);
+    // Only draw if the tile overlaps the canvas area
+    if (x + w <= 0 || y + h <= 0 || x >= W || y >= H) return;
+    try {
+      ctx.drawImage(img, x, y, w, h);
+    } catch(e) {
+      tainted = true;
+    }
+  });
+
+  // Taint probe — if canvas is tainted, toDataURL/toBlob will throw
   if (!tainted) {
-    ctx.drawImage(tileCanvas, 0, 0);
+    try { ctx.getImageData(0, 0, 1, 1); } catch(e) { tainted = true; }
   }
 
-  // ── Step 3: render SVG vector overlay ──────────────────────────────────
+  // If tainted, redraw background (wipe the corrupted pixel data)
+  if (tainted) {
+    ctx.fillStyle = isDark ? '#111920' : '#f0f2f4';
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // ── Step 3: Vector overlay (SVG) ─────────────────────────────────────
   function drawVectors(cb) {
     const svgEl = mapEl.querySelector('.leaflet-overlay-pane svg');
     if (!svgEl) { cb(); return; }
+
+    // The SVG element may be larger than the map (Leaflet pads it).
+    // Get its bounding rect and offset correctly.
+    const svgRect = svgEl.getBoundingClientRect();
     const svgClone = svgEl.cloneNode(true);
-    const svgRect  = svgEl.getBoundingClientRect();
     svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-    svgClone.setAttribute('width',  svgRect.width  || W);
-    svgClone.setAttribute('height', svgRect.height || H);
+    svgClone.setAttribute('width',  svgRect.width);
+    svgClone.setAttribute('height', svgRect.height);
+
+    // Ensure all child elements have explicit fill/stroke (no CSS class dependencies)
     const svgStr = new XMLSerializer().serializeToString(svgClone);
-    // Use data URI instead of blob URL — works in all secure contexts
     const dataURI = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgStr);
-    const svgImg  = new Image();
-    // Safety timeout: if onload never fires (e.g. SVG namespace issue) proceed anyway
-    const guard = setTimeout(function() { svgImg.onerror = svgImg.onload = null; cb(); }, 2000);
+
+    const svgImg = new Image();
+    const guard  = setTimeout(function() {
+      svgImg.onload = svgImg.onerror = null;
+      cb();
+    }, 3000);
+
     svgImg.onload = function() {
       clearTimeout(guard);
-      try { ctx.drawImage(svgImg, svgRect.left - rect.left, svgRect.top - rect.top); } catch(e) {}
+      const dx = Math.round(svgRect.left - rect.left);
+      const dy = Math.round(svgRect.top  - rect.top);
+      try { ctx.drawImage(svgImg, dx, dy, svgRect.width, svgRect.height); } catch(e) {}
       cb();
     };
     svgImg.onerror = function() { clearTimeout(guard); cb(); };
     svgImg.src = dataURI;
   }
 
-  // ── Step 4: annotations + download ─────────────────────────────────────
+  // ── Step 4: Legend overlay ───────────────────────────────────────────
+  function drawLegend() {
+    const layers = (state.layers || []).filter(function(l) {
+      return l && !l.isTile && l.visible;
+    });
+    if (!layers.length) return;
+
+    // Build legend rows as plain text/colour entries
+    const rows = [];
+    layers.forEach(function(layer) {
+      if (layer.classified && layer.classifyClasses && layer.classifyClasses.length) {
+        rows.push({ label: layer.name, isHeader: true });
+        layer.classifyClasses.forEach(function(c) {
+          rows.push({ label: c.label, color: c.color, count: c.count, isLine: (layer.geomType||'').includes('Line'), isPoint: (layer.geomType||'').includes('Point') });
+        });
+      } else {
+        const color   = layer.fillColor    || layer.color || '#3498db';
+        const outline = layer.outlineColor || layer.color || '#3498db';
+        rows.push({
+          label: layer.name, color: layer.noFill ? 'transparent' : color,
+          outline: outline, noFill: layer.noFill,
+          isLine:  (layer.geomType||'').includes('Line'),
+          isPoint: (layer.geomType||'').includes('Point'),
+          shape: layer.pointShape || 'circle',
+        });
+      }
+    });
+    if (!rows.length) return;
+
+    const ROW_H   = 18;
+    const PAD     = 8;
+    const SWATCH  = 14;
+    const GAP     = 6;
+    const MAX_W   = 200;
+    const boxH    = rows.length * ROW_H + PAD * 2;
+    const boxX    = W - MAX_W - 10;
+    const boxY    = 10;
+
+    // Background box
+    ctx.fillStyle = 'rgba(255,255,255,0.92)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+    ctx.lineWidth = 1;
+    _pngRoundRect(ctx, boxX, boxY, MAX_W, boxH, 6);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.font = '10px monospace';
+    rows.forEach(function(row, i) {
+      const rowY = boxY + PAD + i * ROW_H;
+      const cy   = rowY + ROW_H / 2;
+
+      if (row.isHeader) {
+        ctx.fillStyle = '#0074a8';
+        ctx.font = 'bold 9px monospace';
+        ctx.fillText(String(row.label).substring(0, 24), boxX + PAD, cy + 4);
+        ctx.font = '10px monospace';
+        return;
+      }
+
+      const sx = boxX + PAD;
+      if (row.isLine) {
+        ctx.strokeStyle = row.color;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(sx, cy);
+        ctx.lineTo(sx + SWATCH, cy);
+        ctx.stroke();
+        ctx.lineWidth = 1;
+      } else if (row.isPoint) {
+        const r = SWATCH / 2 - 1;
+        ctx.fillStyle = row.noFill ? 'transparent' : row.color;
+        ctx.strokeStyle = row.outline || row.color;
+        ctx.lineWidth = 1.5;
+        if (row.shape === 'square') {
+          ctx.beginPath();
+          ctx.rect(sx + 1, cy - r, SWATCH - 2, SWATCH - 2);
+        } else if (row.shape === 'triangle') {
+          ctx.beginPath();
+          ctx.moveTo(sx + SWATCH/2, cy - r);
+          ctx.lineTo(sx + SWATCH - 1, cy + r);
+          ctx.lineTo(sx + 1, cy + r);
+          ctx.closePath();
+        } else {
+          ctx.beginPath();
+          ctx.arc(sx + SWATCH/2, cy, r, 0, Math.PI * 2);
+        }
+        ctx.fill();
+        ctx.stroke();
+        ctx.lineWidth = 1;
+      } else {
+        // Polygon swatch
+        ctx.fillStyle = row.noFill ? 'rgba(0,0,0,0)' : row.color;
+        ctx.strokeStyle = row.outline || row.color;
+        ctx.lineWidth = 1.5;
+        _pngRoundRect(ctx, sx, cy - SWATCH/2 + 1, SWATCH + 2, SWATCH - 2, 2);
+        if (!row.noFill) ctx.fill();
+        ctx.stroke();
+        ctx.lineWidth = 1;
+      }
+
+      ctx.fillStyle = '#2c3e50';
+      ctx.font = '10px monospace';
+      const maxLabelW = MAX_W - PAD * 2 - SWATCH - GAP;
+      const lx = sx + SWATCH + GAP;
+      const label = String(row.label).substring(0, 26);
+      ctx.fillText(label, lx, cy + 4);
+    });
+  }
+
+  // Helper: rounded rect path
+  function _pngRoundRect(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.lineTo(x + w - r, y);
+    c.quadraticCurveTo(x + w, y, x + w, y + r);
+    c.lineTo(x + w, y + h - r);
+    c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    c.lineTo(x + r, y + h);
+    c.quadraticCurveTo(x, y + h, x, y + h - r);
+    c.lineTo(x, y + r);
+    c.quadraticCurveTo(x, y, x + r, y);
+    c.closePath();
+  }
+
+  // ── Step 5: Scale bar + watermark + download ──────────────────────────
   function annotateAndSave() {
+    // Draw legend
+    try { drawLegend(); } catch(e) { console.warn('Legend draw error:', e); }
+
+    // Scale bar (bottom-left)
     const scale = document.getElementById('scale-display')?.textContent || '';
     const zoom  = state.map ? Math.round(state.map.getZoom()) : '';
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx.fillRect(8, H - 28, 190, 20);
+    ctx.fillStyle = 'rgba(255,255,255,0.88)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.08)';
+    ctx.lineWidth = 1;
+    _pngRoundRect(ctx, 8, H - 30, 195, 22, 4);
+    ctx.fill(); ctx.stroke();
     ctx.fillStyle = '#1c2b3a';
     ctx.font = 'bold 11px monospace';
-    ctx.fillText('1:' + scale + '  Z' + zoom, 13, H - 12);
+    ctx.fillText('1:' + scale + '  Z' + zoom, 14, H - 14);
 
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx.fillRect(W - 80, H - 20, 72, 14);
+    // Watermark (bottom-right)
+    ctx.fillStyle = 'rgba(255,255,255,0.88)';
+    _pngRoundRect(ctx, W - 84, H - 22, 76, 16, 4);
+    ctx.fill(); ctx.stroke();
     ctx.fillStyle = '#0074a8';
-    ctx.font = '10px monospace';
-    ctx.fillText('Gaia v1.0', W - 74, H - 8);
+    ctx.font = 'bold 10px monospace';
+    ctx.fillText('Gaia v1.0', W - 78, H - 9);
 
-    // toBlob — fall back to toDataURL if blob is null or canvas is tainted
+    // Taint note
+    const note = tainted ? ' (basemap omitted — cross-origin)' : '';
     const filename = 'gaia-map-' + new Date().toISOString().slice(0, 10) + '.png';
-    const note = tainted ? ' (basemap omitted — cross-origin tiles)' : '';
 
     function doDownload(url, revoke) {
       const a = document.createElement('a');
       a.href = url; a.download = filename;
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
-      if (revoke) setTimeout(function() { URL.revokeObjectURL(url); }, 1000);
+      if (revoke) setTimeout(function() { URL.revokeObjectURL(url); }, 1500);
       toast('Map exported as PNG ✓' + note, 'success');
     }
 
     try {
       out.toBlob(function(blob) {
-        if (blob) {
-          doDownload(URL.createObjectURL(blob), true);
-        } else {
-          // blob is null — fall back to dataURL
+        if (blob) { doDownload(URL.createObjectURL(blob), true); }
+        else {
           try { doDownload(out.toDataURL('image/png'), false); }
           catch(e) { toast('PNG export failed: ' + e.message, 'error'); }
         }
       }, 'image/png');
     } catch(e) {
-      // toBlob threw (shouldn't happen but just in case)
       try { doDownload(out.toDataURL('image/png'), false); }
       catch(e2) { toast('PNG export failed: ' + e2.message, 'error'); }
     }
@@ -4488,10 +4640,6 @@ function runFieldCalc() {
   updateLayerList(); renderTable(); updateStats();
   toast(`Field "${fieldName}" calculated for ${ok} feature${ok!==1?'s':''}`+(errors?` (${errors} errors)`:''), errors ? 'info' : 'success');
   document.getElementById('fieldcalc-backdrop').classList.remove('open');
-}
-
-function showServerInstructions() {
-  document.getElementById('server-modal-backdrop').style.display = 'flex';
 }
 
 function closeColorPicker() {
