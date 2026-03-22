@@ -331,6 +331,7 @@
           <div class="stat-card"><div class="stat-val" id="stat-features">–</div><div class="stat-lbl">Total</div></div>
           <div class="stat-card"><div class="stat-val" id="stat-fields">–</div><div class="stat-lbl">Fields</div></div>
           <div class="stat-card"><div class="stat-val" id="stat-geomtype">–</div><div class="stat-lbl">Type</div></div>
+          <div class="stat-card"><div class="stat-val" id="stat-crs" style="font-size:9px;">–</div><div class="stat-lbl">CRS</div></div>
         </div>
         <div id="bbox-section" style="display:none;">
           <div style="padding:3px 10px;font-family:var(--mono);font-size:8px;color:var(--text3);letter-spacing:1px;">BOUNDING BOX</div>
@@ -801,6 +802,9 @@
           <input type="text" id="arcgis-where" placeholder="1=1  (all features)"/>
         </div>
         <button class="btn btn-primary btn-full" onclick="loadArcGISLayer()">Load Features</button>
+        <div style="margin-top:6px;padding:6px 8px;background:rgba(20,177,231,0.08);border:1px solid rgba(20,177,231,0.25);border-radius:4px;font-family:var(--mono);font-size:9px;color:var(--text3);line-height:1.5;">
+          ⚠ Data will only be loaded from the <strong style="color:var(--accent);">current map view extent</strong>. Zoom to your area of interest before loading, or uncheck "Current map extent only" to load all features (up to the max limit).
+        </div>
       </div>
       <div style="margin-top:10px;font-size:10px;color:var(--text3);line-height:1.6;">
         Supports: FeatureServer (vector, downloads as GeoJSON) · MapServer/ImageServer (displays as tile overlay)

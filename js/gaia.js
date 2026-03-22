@@ -789,6 +789,8 @@ function updateStats() {
   const gt=layer.geomType||'–';
   const shortGT=gt.includes('Polygon')?'POLY':gt.includes('Line')?'LINE':gt.includes('Point')?'POINT':gt.substring(0,5).toUpperCase();
   document.getElementById('stat-geomtype').textContent=shortGT;
+  const crsEl = document.getElementById('stat-crs');
+  if (crsEl) crsEl.textContent = layer.sourceCRS || 'EPSG:4326';
   try {
     const b=layer.leafletLayer.getBounds();
     document.getElementById('bbox-section').style.display='block';
@@ -801,7 +803,7 @@ function updateStats() {
 }
 
 function clearStats() {
-  ['stat-features','stat-fields','stat-geomtype'].forEach(id => {
+  ['stat-features','stat-fields','stat-geomtype','stat-crs'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.textContent = '–';
   });
@@ -814,21 +816,11 @@ function clearStats() {
 }
 
 // ── LEGEND ──────────────────────────────────────
-function updateLegend() {
-  const legendSection = document.getElementById('legend-section');
-  const legendBody    = document.getElementById('legend-body');
-  if (!legendSection || !legendBody) return;
-
-  const layer = state.layers[state.activeLayerIndex];
-  if (!layer || layer.isTile) { legendSection.style.display = 'none'; return; }
-
-  legendSection.style.display = 'block';
-
+function _makeLegendEntryHTML(layer) {
   const geomType = layer.geomType || '';
-  const isPoint   = geomType.includes('Point');
-  const isLine    = geomType.includes('Line');
+  const isPoint = geomType.includes('Point');
+  const isLine  = geomType.includes('Line');
 
-  // If layer has classify classes, show classified legend with live view counts
   if (layer.classified && layer.classifyClasses && layer.classifyClasses.length) {
     const field = layer.classifyField || '';
     const rows = layer.classifyClasses.map(c => {
@@ -840,22 +832,20 @@ function updateLegend() {
       return `<div style="display:flex;align-items:center;gap:6px;padding:2px 0;">
         ${swatch}
         <span style="font-family:var(--mono);font-size:9px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${escHtml(String(c.label))}</span>
+        <span style="font-family:var(--mono);font-size:9px;color:var(--text3);">${c.count}</span>
       </div>`;
     }).join('');
-    legendBody.innerHTML = `
-      <div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">
-        <span>${escHtml(field)}</span>
-      </div>
-      ${rows}`;
-    return;
+    return `<div style="margin-bottom:8px;">
+      <div style="font-family:var(--mono);font-size:9px;font-weight:600;color:var(--text2);margin-bottom:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(layer.name)}</div>
+      <div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">${escHtml(field)}</div>
+      ${rows}
+    </div>`;
   }
 
-  // Default single-colour legend
-  const color      = layer.fillColor    || layer.color || '#3498db';
-  const outline    = layer.outlineColor || layer.color || '#3498db';
-  const noFill     = layer.noFill || false;
-  const shape      = layer.pointShape || 'circle';
-
+  const color   = layer.fillColor    || layer.color || '#3498db';
+  const outline = layer.outlineColor || layer.color || '#3498db';
+  const noFill  = layer.noFill || false;
+  const shape   = layer.pointShape || 'circle';
   let swatch;
   if (isPoint) {
     const size = 14;
@@ -874,14 +864,23 @@ function updateLegend() {
   } else {
     swatch = `<div style="width:22px;height:14px;border-radius:3px;background:${noFill?'transparent':color};border:2px solid ${outline};flex-shrink:0;"></div>`;
   }
-
   const featCount = (layer.geojson && layer.geojson.features) ? layer.geojson.features.length : 0;
-  legendBody.innerHTML = `
-    <div style="display:flex;align-items:center;gap:8px;padding:2px 0;">
-      ${swatch}
-      <span style="font-family:var(--mono);font-size:10px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${escHtml(layer.name)}</span>
-      <span style="font-family:var(--mono);font-size:9px;color:var(--text3);flex-shrink:0;">${featCount}</span>
-    </div>`;
+  return `<div style="display:flex;align-items:center;gap:8px;padding:2px 0;margin-bottom:4px;">
+    ${swatch}
+    <span style="font-family:var(--mono);font-size:10px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${escHtml(layer.name)}</span>
+    <span style="font-family:var(--mono);font-size:9px;color:var(--text3);flex-shrink:0;">${featCount}</span>
+  </div>`;
+}
+
+function updateLegend() {
+  const legendSection = document.getElementById('legend-section');
+  const legendBody    = document.getElementById('legend-body');
+  if (!legendSection || !legendBody) return;
+
+  const visibleLayers = state.layers.filter(l => l && l.visible && !l.isTile);
+  if (!visibleLayers.length) { legendSection.style.display = 'none'; return; }
+  legendSection.style.display = 'block';
+  legendBody.innerHTML = visibleLayers.map(l => _makeLegendEntryHTML(l)).join('');
 }
 
 // ── EMPTY STATE VISIBILITY ───────────────────────────────────────────────────
@@ -4221,7 +4220,23 @@ function _exportMapPNGWithTitle(userTitle) {
 
   // ── Legend (top-right of map area) ───────────────────────────────────────
   function drawLegend() {
-    const layers = (state.layers || []).filter(function(l) { return l && !l.isTile && l.visible; });
+    // Only show layers that are visible, non-tile, AND have at least one feature in the current map extent
+    const mapBounds = state.map ? state.map.getBounds() : null;
+    const layers = (state.layers || []).filter(function(l) {
+      if (!l || l.isTile || !l.visible) return false;
+      if (!mapBounds) return true;
+      // Check if any feature intersects the current map bounds
+      const feats = (l.geojson && l.geojson.features) || [];
+      if (!feats.length) return false;
+      return feats.some(function(f) {
+        if (!f || !f.geometry) return false;
+        try {
+          const lb = l.leafletLayer.getBounds ? l.leafletLayer.getBounds() : null;
+          if (lb) return mapBounds.overlaps(lb);
+        } catch(e) {}
+        return true; // if we can't check, include it
+      });
+    });
     if (!layers.length) return;
 
     const rows = [];
