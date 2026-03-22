@@ -30,7 +30,6 @@
   <span class="header-tag">Gaia v1.0</span>
   <div class="header-actions">
     <button class="btn btn-ghost btn-sm" onclick="fitAll()" style="color:#e8f4fb;border-color:rgba(255,255,255,0.3);background:rgba(255,255,255,0.08);">⛶ Fit View</button>
-    <button class="btn btn-ghost btn-sm" onclick="doExportSession()" title="Export session as .gaia file" style="color:#e8f4fb;border-color:rgba(255,255,255,0.3);background:rgba(255,255,255,0.08);">📤 Export Session</button>
     <button class="btn btn-ghost btn-sm" onclick="if(confirm('Clear saved session? Layers will not restore next time.')) { clearSession(); }" title="Clear saved session" style="color:#ffaaaa;border-color:rgba(255,100,100,0.4);background:rgba(255,80,80,0.08);">🗑</button>
     <button id="dark-mode-btn" onclick="toggleDarkMode()" title="Toggle dark/light mode" style="color:#e8f4fb;border-color:rgba(255,255,255,0.3);background:rgba(255,255,255,0.08);font-size:14px;padding:3px 8px;border:1px solid rgba(255,255,255,0.3);border-radius:5px;cursor:pointer;line-height:1;">🌙</button>
   </div>
@@ -240,7 +239,7 @@
   <!-- MAP COLUMN -->
   <div id="map-column">
     <div id="map-container">
-      <div id="map"></div>
+      <div id="map">
       <!-- GUIDED EMPTY STATE — hidden once first layer loads -->
       <div id="map-empty-state">
         <div id="mes-inner">
@@ -266,6 +265,7 @@
             💡 Tip — you can also drop multiple files at once to load several layers together
           </div>
         </div>
+      </div>
       </div>
     </div>
 
@@ -530,6 +530,7 @@
   <div class="ctx-item" onclick="ctxRenameLayer()"><span class="ctx-icon">✎</span> Rename Layer</div>
   <div class="ctx-item" onclick="ctxChangeColor()"><span class="ctx-icon">🎨</span> Symbology</div>
   <div class="ctx-item" id="ctx-classify-item" onclick="ctxOpenClassify()"><span class="ctx-icon">🎨</span> Classify by Field</div>
+  <div class="ctx-item" onclick="ctxExportData()"><span class="ctx-icon">↓</span> Export Data</div>
   <div class="ctx-sep"></div>
   <div class="ctx-item danger" onclick="ctxRemoveLayer()"><span class="ctx-icon">✕</span> Remove Layer</div>
 </div>

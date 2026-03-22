@@ -89,7 +89,7 @@ html, body { height: 100%; overflow: hidden; font-family: var(--sans); backgroun
   box-shadow: 0 2px 12px rgba(0,0,0,0.18);
 }
 
-.logo img { height: 30px; display: block; }
+.logo img { height: 30px; display: inline-block; }
 .header-tag { color: var(--sky); font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; }
 .header-actions { display: flex; gap: 8px; margin-left: auto; align-items: center; }
 
@@ -115,7 +115,7 @@ html, body { height: 100%; overflow: hidden; font-family: var(--sans); backgroun
 }
 
 #map-container { flex: 1; position: relative; min-height: 0; overflow: hidden; }
-#map { width: 100%; height: 100%; }
+#map { width: 100%; height: 100%; position: relative; }
 
 /* ── ATTRIBUTE TABLE STRIP (bottom of map column) ── */
 #attr-strip {
@@ -630,7 +630,7 @@ select option { background: var(--bg2); }
   display: flex;
   align-items: center;
   justify-content: center;
-  pointer-events: none; /* let clicks through to map underneath */
+  pointer-events: none;
   transition: opacity 0.3s ease;
   box-sizing: border-box;
 }
@@ -706,5 +706,9 @@ body.dark-mode #mes-inner {
 }
 #map-empty-state.mes-hidden {
   opacity: 0;
-  pointer-events: none;
+  pointer-events: none !important;
+  display: none;
+}
+#map-empty-state.mes-hidden * {
+  pointer-events: none !important;
 }

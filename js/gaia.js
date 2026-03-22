@@ -875,10 +875,12 @@ function updateLegend() {
     swatch = `<div style="width:22px;height:14px;border-radius:3px;background:${noFill?'transparent':color};border:2px solid ${outline};flex-shrink:0;"></div>`;
   }
 
+  const featCount = (layer.geojson && layer.geojson.features) ? layer.geojson.features.length : 0;
   legendBody.innerHTML = `
     <div style="display:flex;align-items:center;gap:8px;padding:2px 0;">
       ${swatch}
-      <span style="font-family:var(--mono);font-size:10px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(layer.name)}</span>
+      <span style="font-family:var(--mono);font-size:10px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${escHtml(layer.name)}</span>
+      <span style="font-family:var(--mono);font-size:9px;color:var(--text3);flex-shrink:0;">${featCount}</span>
     </div>`;
 }
 
@@ -889,9 +891,13 @@ function _updateEmptyState() {
   const hasLayers = state.layers.some(l => l != null);
   if (hasLayers) {
     mes.classList.add('mes-hidden');
+    mes.style.display = 'none';
+    mes.style.pointerEvents = 'none';
   } else {
-    mes.classList.remove('mes-hidden');
+    mes.style.display = 'flex';
+    mes.style.pointerEvents = '';
     mes.style.opacity = '';
+    mes.classList.remove('mes-hidden');
   }
 }
 
@@ -2198,6 +2204,16 @@ function ctxRemoveLayer() {
   removeLayer(ctxLayerIdx);
 }
 
+function ctxExportData() {
+  closeLayerCtxMenu();
+  const layer = state.layers[ctxLayerIdx];
+  if (!layer || layer.isTile) { toast('Cannot export a tile layer', 'error'); return; }
+  // Open the export panel and pre-select this layer
+  openExportPanel();
+  const sel = document.getElementById('export-layer-select');
+  if (sel) { sel.value = String(ctxLayerIdx); }
+}
+
 function clearSelection() {
   if (state.selectedFeatureIndices.size === 0) return;
   const n = state.selectedFeatureIndices.size;
@@ -3085,7 +3101,8 @@ function doSaveLocally() {
 }
 
 function doExportSession() {
-  document.getElementById('save-popup').style.display = 'none';
+  const sp = document.getElementById('save-popup');
+  if (sp) sp.style.display = 'none';
   if (!state.layers.length) { toast('No layers to export', 'error'); return; }
   try {
     const sessionData = {
@@ -4079,35 +4096,42 @@ function _exportMapPNGWithTitle(userTitle) {
   ctx.rect(0, MAP_Y, W, H);
   ctx.clip();
 
-  // ── Basemap tiles ─────────────────────────────────────────────────────────
-  const testCanvas = document.createElement('canvas');
-  testCanvas.width = 1; testCanvas.height = 1;
-  const testCtx = testCanvas.getContext('2d');
-  const allImgs = Array.from(mapEl.querySelectorAll('.leaflet-map-pane img'));
-  const safeImgs = [];
+  // ── Basemap tiles (fetched as blobs to avoid canvas taint) ────────────────
+  // Directly drawing cross-origin <img> elements taints the canvas.
+  // Instead we re-fetch each tile URL as a blob, create an object URL,
+  // draw it, then revoke it — this keeps the canvas clean.
   let tainted = false;
 
-  allImgs.forEach(function(img) {
-    if (!img.complete || !img.naturalWidth) return;
-    try {
-      testCtx.drawImage(img, 0, 0, 1, 1);
-      testCtx.getImageData(0, 0, 1, 1);
-      safeImgs.push(img);
-    } catch(e) {
-      tainted = true;
-      testCtx.clearRect(0, 0, 1, 1);
-    }
-  });
+  function drawAllTiles(done) {
+    const allImgs = Array.from(mapEl.querySelectorAll('.leaflet-map-pane img'));
+    if (!allImgs.length) { done(); return; }
+    let remaining = allImgs.length;
+    function finish() { if (--remaining === 0) done(); }
+    allImgs.forEach(function(img) {
+      const ir = img.getBoundingClientRect();
+      const x = Math.round(ir.left - rect.left);
+      const y = Math.round(ir.top  - rect.top);
+      const iw = Math.round(ir.width);
+      const ih = Math.round(ir.height);
+      if (!img.complete || !img.naturalWidth || x + iw <= 0 || y + ih <= 0 || x >= W || y >= H) { finish(); return; }
+      // Fetch the tile as a blob to sidestep CORS canvas taint
+      fetch(img.src)
+        .then(function(r) { return r.blob(); })
+        .then(function(blob) {
+          const objUrl = URL.createObjectURL(blob);
+          const tmp = new Image();
+          tmp.onload = function() {
+            try { ctx.drawImage(tmp, x, MAP_Y + y, iw, ih); } catch(e) { tainted = true; }
+            URL.revokeObjectURL(objUrl);
+            finish();
+          };
+          tmp.onerror = function() { URL.revokeObjectURL(objUrl); finish(); };
+          tmp.src = objUrl;
+        })
+        .catch(function() { finish(); });
+    });
+  }
 
-  safeImgs.forEach(function(img) {
-    const ir = img.getBoundingClientRect();
-    const x = Math.round(ir.left - rect.left);
-    const y = Math.round(ir.top  - rect.top);
-    const iw = Math.round(ir.width);
-    const ih = Math.round(ir.height);
-    if (x + iw <= 0 || y + ih <= 0 || x >= W || y >= H) return;
-    try { ctx.drawImage(img, x, MAP_Y + y, iw, ih); } catch(e) {}
-  });
 
   // ── Rounded-rect helper ───────────────────────────────────────────────────
   function rrect(c, x, y, w, h, r) {
@@ -4329,7 +4353,7 @@ function _exportMapPNGWithTitle(userTitle) {
   }
 
   function doDownload() {
-    const note     = tainted ? ' (basemap omitted — cross-origin)' : '';
+    const note     = '';
     const filename = 'gaia-export-' + dd + '-' + mm + '-' + yyyy + '.png';
     function dl(url, revoke) {
       const a = document.createElement('a');
@@ -4348,7 +4372,7 @@ function _exportMapPNGWithTitle(userTitle) {
     }
   }
 
-  drawVectors(function() { drawMarkers(finaliseAndSave); });
+  drawAllTiles(function() { drawVectors(function() { drawMarkers(finaliseAndSave); }); });
 }
 
 // ══════════════════════════════════════════════════
@@ -4447,7 +4471,7 @@ function previewClassify() {
         <input type="color" style="position:absolute;opacity:0;width:0;height:0;pointer-events:none;" id="cls-color-input-${ci}" value="${c.color}" onchange="clsApplyColor(${ci},this.value)"/>
       </div>
       <span style="font-family:var(--mono);font-size:9px;color:var(--text2);flex:1;">${escHtml(String(c.label))}</span>
-      <span style="font-family:var(--mono);font-size:9px;color:var(--text3);">${c.count} ft</span>
+      <span style="font-family:var(--mono);font-size:9px;color:var(--text3);">${c.count}</span>
     </div>`).join('');
   preview.innerHTML = `<div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">${escHtml(field)}</div>${swatches}`;
 }
