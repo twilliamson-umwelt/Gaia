@@ -284,10 +284,12 @@ async function loadGAIASession(file) {
       // Restore extra symbology if saved
       const newLayer = state.layers[state.layers.length - 1];
       if (newLayer) {
-        if (l.fillColor)    newLayer.fillColor    = l.fillColor;
-        if (l.outlineColor) newLayer.outlineColor = l.outlineColor;
-        if (l.noFill)       newLayer.noFill       = l.noFill;
-        if (l.pointShape)   newLayer.pointShape   = l.pointShape;
+        if (l.fillColor)     newLayer.fillColor     = l.fillColor;
+        if (l.outlineColor)  newLayer.outlineColor  = l.outlineColor;
+        if (l.noFill)        newLayer.noFill        = l.noFill;
+        if (l.pointShape)    newLayer.pointShape    = l.pointShape;
+        if (l.pointSize   != null) newLayer.pointSize    = l.pointSize;
+        if (l.outlineWidth != null) newLayer.outlineWidth = l.outlineWidth;
         if (l.editable)     newLayer.editable     = l.editable;
         if (l.editGeomType) newLayer.editGeomType = l.editGeomType;
         if (l.visible === false) {
@@ -899,7 +901,172 @@ function updateLegend() {
   const visibleLayers = state.layers.filter(l => l && l.visible && !l.isTile);
   if (!visibleLayers.length) { legendSection.style.display = 'none'; return; }
   legendSection.style.display = 'block';
-  legendBody.innerHTML = visibleLayers.map(l => _makeLegendEntryHTML(l)).join('');
+
+  legendBody.innerHTML = visibleLayers.map(l => {
+    const idx       = state.layers.indexOf(l);
+    const geomType  = l.geomType || '';
+    const isPoint   = geomType.includes('Point');
+    const isLine    = geomType.includes('Line');
+    const featCount = (l.geojson && l.geojson.features) ? l.geojson.features.length : 0;
+    const shape     = l.pointShape || 'circle';
+    const color     = l.fillColor    || l.color || '#3498db';
+    const outline   = l.outlineColor || l.color || '#3498db';
+    const noFill    = l.noFill || false;
+
+    // Drag handle attrs shared by every top-level row
+    const dragAttrs = `draggable="true"
+      data-layer-idx="${idx}"
+      ondragstart="legendDragStart(event,${idx})"
+      ondragover="legendDragOver(event)"
+      ondragleave="legendDragLeave(event)"
+      ondrop="legendDrop(event,${idx})"
+      ondragend="legendDragEnd(event)"`;
+
+    if (l.classified && l.classifyClasses && l.classifyClasses.length) {
+      // ── CLASSIFIED layer ───────────────────────────────────────────────
+      const field = l.classifyField || '';
+      const classRows = l.classifyClasses.map(c => {
+        // Swatch for each class
+        let swatch;
+        if (isPoint) {
+          const sz = 12;
+          let svgShape;
+          if (shape === 'square') {
+            svgShape = `<rect x="1" y="1" width="${sz-2}" height="${sz-2}" fill="${c.color}" stroke="${c.color}" stroke-width="1" rx="1" opacity="0.9"/>`;
+          } else if (shape === 'triangle') {
+            svgShape = `<polygon points="${sz/2},1 ${sz-1},${sz-1} 1,${sz-1}" fill="${c.color}" stroke="${c.color}" stroke-width="1" opacity="0.9"/>`;
+          } else if (shape === 'diamond') {
+            svgShape = `<polygon points="${sz/2},1 ${sz-1},${sz/2} ${sz/2},${sz-1} 1,${sz/2}" fill="${c.color}" stroke="${c.color}" stroke-width="1" opacity="0.9"/>`;
+          } else {
+            svgShape = `<circle cx="${sz/2}" cy="${sz/2}" r="${sz/2-1}" fill="${c.color}" stroke="${c.color}" stroke-width="0.5" opacity="0.9"/>`;
+          }
+          swatch = `<svg xmlns="http://www.w3.org/2000/svg" width="${sz}" height="${sz}" viewBox="0 0 ${sz} ${sz}" style="flex-shrink:0;">${svgShape}</svg>`;
+        } else if (isLine) {
+          swatch = `<div style="width:22px;height:3px;background:${c.color};border-radius:2px;flex-shrink:0;margin:4px 0;"></div>`;
+        } else {
+          swatch = `<div style="width:18px;height:12px;border-radius:2px;background:${c.color};border:1px solid rgba(0,0,0,0.15);flex-shrink:0;"></div>`;
+        }
+        return `<div style="display:flex;align-items:center;gap:6px;padding:2px 0 2px 18px;">
+          ${swatch}
+          <span style="font-family:var(--mono);font-size:9px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${escHtml(String(c.label))}</span>
+          <span style="font-family:var(--mono);font-size:9px;color:var(--text3);flex-shrink:0;">${c.count}</span>
+        </div>`;
+      }).join('');
+
+      return `<div class="legend-item" ${dragAttrs}
+          style="padding:3px 2px;margin-bottom:4px;cursor:grab;border-radius:3px;user-select:none;">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+          <span style="font-size:9px;color:var(--text3);cursor:grab;flex-shrink:0;" title="Drag to reorder">⠿</span>
+          <span style="font-family:var(--mono);font-size:10px;color:var(--text2);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${escHtml(l.name)}</span>
+          <span style="font-family:var(--mono);font-size:9px;color:var(--text3);flex-shrink:0;">${featCount}</span>
+        </div>
+        <div style="font-family:var(--mono);font-size:8px;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;padding-left:18px;margin-bottom:2px;">${escHtml(field)}</div>
+        ${classRows}
+      </div>`;
+    }
+
+    // ── SINGLE-SYMBOL layer ────────────────────────────────────────────
+    const swatch = _makeLegendSwatchHTML(l);
+    return `<div class="legend-item" ${dragAttrs}
+        style="display:flex;align-items:center;gap:6px;padding:3px 2px;margin-bottom:3px;cursor:grab;border-radius:3px;user-select:none;">
+      <span style="font-size:9px;color:var(--text3);cursor:grab;flex-shrink:0;" title="Drag to reorder">⠿</span>
+      ${swatch}
+      <span style="font-family:var(--mono);font-size:10px;color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${escHtml(l.name)}</span>
+      <span style="font-family:var(--mono);font-size:9px;color:var(--text3);flex-shrink:0;">${featCount}</span>
+    </div>`;
+  }).join('');
+}
+
+// Separate helper that produces just the swatch HTML (shared with legend rows)
+function _makeLegendSwatchHTML(layer) {
+  const geomType = layer.geomType || '';
+  const isPoint = geomType.includes('Point');
+  const isLine  = geomType.includes('Line');
+  const color   = layer.fillColor    || layer.color || '#3498db';
+  const outline = layer.outlineColor || layer.color || '#3498db';
+  const noFill  = layer.noFill || false;
+  const shape   = layer.pointShape || 'circle';
+  if (layer.classified && layer.classifyClasses && layer.classifyClasses.length) {
+    // For classified, just show a multi-swatch indicator
+    const c0 = layer.classifyClasses[0] ? layer.classifyClasses[0].color : color;
+    const cx = layer.classifyClasses.length > 1 ? layer.classifyClasses[Math.floor(layer.classifyClasses.length/2)].color : color;
+    return `<div style="display:flex;gap:1px;flex-shrink:0;">
+      <div style="width:6px;height:12px;border-radius:1px;background:${c0};"></div>
+      <div style="width:6px;height:12px;border-radius:1px;background:${cx};"></div>
+    </div>`;
+  }
+  if (isPoint) {
+    const size = 14;
+    let svgShape;
+    if (shape === 'square') {
+      svgShape = `<rect x="2" y="2" width="${size-4}" height="${size-4}" fill="${noFill?'none':color}" stroke="${outline}" stroke-width="1.5" rx="1"/>`;
+    } else if (shape === 'triangle') {
+      svgShape = `<polygon points="${size/2},2 ${size-2},${size-2} 2,${size-2}" fill="${noFill?'none':color}" stroke="${outline}" stroke-width="1.5"/>`;
+    } else if (shape === 'diamond') {
+      svgShape = `<polygon points="${size/2},1 ${size-1},${size/2} ${size/2},${size-1} 1,${size/2}" fill="${noFill?'none':color}" stroke="${outline}" stroke-width="1.5"/>`;
+    } else {
+      const r=(size-4)/2;
+      svgShape = `<circle cx="${size/2}" cy="${size/2}" r="${r}" fill="${noFill?'none':color}" stroke="${outline}" stroke-width="1.5"/>`;
+    }
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" style="flex-shrink:0;">${svgShape}</svg>`;
+  } else if (isLine) {
+    return `<div style="width:28px;height:3px;background:${color};border-radius:2px;flex-shrink:0;margin:5px 0;"></div>`;
+  } else {
+    return `<div style="width:22px;height:14px;border-radius:3px;background:${noFill?'transparent':color};border:2px solid ${outline};flex-shrink:0;"></div>`;
+  }
+}
+
+// Legend drag-to-reorder
+let _legendDragSrcIdx = -1;
+
+function legendDragStart(e, layerIdx) {
+  _legendDragSrcIdx = layerIdx;
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', String(layerIdx));
+  e.currentTarget.style.opacity = '0.4';
+}
+
+function legendDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  e.currentTarget.style.background = 'var(--bg3)';
+  e.currentTarget.style.borderTop = '2px solid var(--accent)';
+}
+
+function legendDragLeave(e) {
+  e.currentTarget.style.background = '';
+  e.currentTarget.style.borderTop = '';
+}
+
+function legendDrop(e, targetLayerIdx) {
+  e.preventDefault();
+  e.currentTarget.style.background = '';
+  e.currentTarget.style.borderTop = '';
+  if (_legendDragSrcIdx < 0 || _legendDragSrcIdx === targetLayerIdx) return;
+  // Reorder state.layers so the dragged layer moves to the target position
+  const srcLayer = state.layers[_legendDragSrcIdx];
+  state.layers.splice(_legendDragSrcIdx, 1);
+  const newTarget = state.layers.indexOf(state.layers.find((l, i) => {
+    // Re-find target after splice
+    return l === state.layers[targetLayerIdx > _legendDragSrcIdx ? targetLayerIdx - 1 : targetLayerIdx];
+  }));
+  // Simpler: find target layer by data attribute
+  const destEl = e.currentTarget;
+  const destIdx = parseInt(destEl.getAttribute('data-layer-idx'));
+  // We already spliced srcLayer out; find the new index for destIdx
+  let insertAt = destIdx > _legendDragSrcIdx ? destIdx - 1 : destIdx;
+  state.layers.splice(insertAt, 0, srcLayer);
+  if (state.activeLayerIndex === _legendDragSrcIdx) state.activeLayerIndex = insertAt;
+  refreshLayerZOrder();
+  updateLayerList();
+  updateLegend();
+}
+
+function legendDragEnd(e) {
+  _legendDragSrcIdx = -1;
+  e.currentTarget.style.opacity = '';
+  e.currentTarget.style.background = '';
+  e.currentTarget.style.borderTop = '';
 }
 
 // ── EMPTY STATE VISIBILITY ───────────────────────────────────────────────────
@@ -3299,8 +3466,19 @@ function showMapCtxMenu(e) {
   const menu = document.getElementById('map-ctx-menu');
   const lat = e.latlng.lat.toFixed(7), lng = e.latlng.lng.toFixed(7);
   document.getElementById('map-ctx-coords-display').textContent = lat + ', ' + lng;
-  const x = Math.min(e.originalEvent.clientX, window.innerWidth - 220);
-  const y = Math.min(e.originalEvent.clientY, window.innerHeight - 200);
+
+  const addrRow = document.getElementById('map-ctx-address-row');
+  const addrEl  = document.getElementById('map-ctx-address-display');
+  if (addrRow && addrEl) {
+    addrEl.textContent = 'Fetching address…';
+    addrRow.style.display = 'flex';
+    reverseGeocode(e.latlng.lat, e.latlng.lng, function(addr) {
+      addrEl.textContent = addr || 'Address not found';
+    });
+  }
+
+  const x = Math.min(e.originalEvent.clientX, window.innerWidth - 310);
+  const y = Math.min(e.originalEvent.clientY, window.innerHeight - 220);
   menu.style.left = x + 'px';
   menu.style.top  = y + 'px';
   menu.style.display = 'block';
@@ -3353,6 +3531,179 @@ function mapCtxAddPoint() {
   finaliseFeature();
 }
 
+
+
+// ── LOCATION SEARCH (Nominatim) ───────────────────────────────────────
+function searchLocation() {
+  const input = document.getElementById('location-search-input');
+  const q = (input ? input.value : '').trim();
+  if (!q) return;
+  const resultsDiv = document.getElementById('location-search-results');
+  if (resultsDiv) {
+    resultsDiv.innerHTML = '<div style="padding:8px 12px;font-family:var(--mono);font-size:10px;color:var(--text3);">Searching…</div>';
+    resultsDiv.style.display = 'block';
+  }
+  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=6&addressdetails=1`;
+  fetch(url, { headers: { 'Accept-Language': 'en', 'User-Agent': 'GaiaGISViewer/1.0' } })
+    .then(r => r.json())
+    .then(data => {
+      if (!resultsDiv) return;
+      if (!data || !data.length) {
+        resultsDiv.innerHTML = '<div style="padding:8px 12px;font-family:var(--mono);font-size:10px;color:var(--text3);">No results found.</div>';
+        return;
+      }
+      resultsDiv.innerHTML = data.map((item, i) =>
+        `<div class="loc-result" onclick="selectLocationResult(${item.lat},${item.lon},'${escHtml(item.display_name).replace(/'/g,'&#39;')}')"
+          style="padding:7px 12px;font-family:var(--mono);font-size:10px;color:var(--text);cursor:pointer;
+                 border-bottom:1px solid var(--border);line-height:1.4;"
+          onmouseover="this.style.background='var(--bg3)'" onmouseout="this.style.background=''">
+          <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escHtml(item.display_name)}</div>
+          <div style="color:var(--text3);font-size:9px;margin-top:2px;">${item.type} · ${parseFloat(item.lat).toFixed(4)}, ${parseFloat(item.lon).toFixed(4)}</div>
+        </div>`
+      ).join('');
+    })
+    .catch(() => {
+      if (resultsDiv) resultsDiv.innerHTML = '<div style="padding:8px 12px;font-family:var(--mono);font-size:10px;color:#c0392b;">Search failed. Check your connection.</div>';
+    });
+}
+
+function selectLocationResult(lat, lon, displayName) {
+  const resultsDiv = document.getElementById('location-search-results');
+  const input = document.getElementById('location-search-input');
+  if (resultsDiv) resultsDiv.style.display = 'none';
+  if (input) input.value = displayName;
+  if (state.map) {
+    state.map.setView([parseFloat(lat), parseFloat(lon)], 15, { animate: true });
+  }
+}
+
+function clearLocationResults() {
+  const resultsDiv = document.getElementById('location-search-results');
+  if (resultsDiv) resultsDiv.style.display = 'none';
+}
+
+// Close search results when clicking outside
+document.addEventListener('click', function(e) {
+  const bar = document.getElementById('location-search-bar');
+  const res = document.getElementById('location-search-results');
+  if (res && bar && !bar.contains(e.target) && !res.contains(e.target)) {
+    res.style.display = 'none';
+  }
+});
+
+// ── REVERSE GEOCODE HELPER ────────────────────────────────────────────
+let _reverseGeocodeCache = {};
+
+function _buildAddrFromNominatim(data) {
+  if (!data) return null;
+  if (data.address) {
+    var a = data.address;
+    var parts = [];
+    var road = a.road || a.pedestrian || a.footway || a.path || a.highway || '';
+    var street = (a.house_number && road) ? a.house_number + ' ' + road
+               : (a.house_number || road);
+    if (street.trim()) parts.push(street.trim());
+    var locality = a.suburb || a.neighbourhood || a.quarter || a.city_district ||
+                   a.town || a.village || a.hamlet || a.city || '';
+    if (locality) parts.push(locality);
+    var region = [a.state, a.postcode].filter(Boolean).join(' ');
+    if (region) parts.push(region);
+    return parts.length ? parts.join(', ') : (data.display_name || null);
+  }
+  return data.display_name || null;
+}
+
+function reverseGeocode(lat, lng, callback) {
+  var key = lat.toFixed(5) + ',' + lng.toFixed(5);
+  if (_reverseGeocodeCache[key]) { callback(_reverseGeocodeCache[key]); return; }
+
+  // Primary: zoom=18 for maximum detail (best chance of house_number)
+  var url = 'https://nominatim.openstreetmap.org/reverse?lat=' + lat + '&lon=' + lng +
+            '&format=json&zoom=18&addressdetails=1';
+
+  fetch(url, { headers: { 'Accept-Language': 'en', 'User-Agent': 'GaiaGISViewer/1.0' } })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var hasNumber = data && data.address && data.address.house_number;
+
+      if (hasNumber) {
+        // We have a house number — done
+        var addr = _buildAddrFromNominatim(data);
+        _reverseGeocodeCache[key] = addr;
+        callback(addr);
+        return;
+      }
+
+      // No house number: do a nearby address search to find the closest numbered property.
+      // Search within ~50 m using a bounding box (~0.0005 deg each side).
+      var d = 0.0005;
+      var viewbox = (lng - d) + ',' + (lat + d) + ',' + (lng + d) + ',' + (lat - d);
+      var searchUrl = 'https://nominatim.openstreetmap.org/search?q=&format=json&limit=5' +
+                      '&addressdetails=1&bounded=1&viewbox=' + viewbox;
+
+      fetch(searchUrl, { headers: { 'Accept-Language': 'en', 'User-Agent': 'GaiaGISViewer/1.0' } })
+        .then(function(r2) { return r2.json(); })
+        .then(function(results) {
+          // Find the nearest result that has a house_number
+          var best = null, bestDist = Infinity;
+          (results || []).forEach(function(r) {
+            if (r.address && r.address.house_number) {
+              var dlat = (parseFloat(r.lat) - lat);
+              var dlng = (parseFloat(r.lon) - lng);
+              var dist = dlat * dlat + dlng * dlng;
+              if (dist < bestDist) { bestDist = dist; best = r; }
+            }
+          });
+
+          var addr;
+          if (best) {
+            // Use the nearby numbered address but keep the road from the primary result
+            // so we don't misattribute a number from a different street
+            var primaryRoad = (data && data.address) ?
+              (data.address.road || data.address.pedestrian || data.address.footway || '') : '';
+            var nearbyRoad = best.address.road || best.address.pedestrian || best.address.footway || '';
+            if (primaryRoad && nearbyRoad && primaryRoad.toLowerCase() === nearbyRoad.toLowerCase()) {
+              // Same road — safe to use the nearby house number
+              addr = _buildAddrFromNominatim(best);
+            } else {
+              // Different road — don't attach a potentially wrong number; use primary without number
+              addr = _buildAddrFromNominatim(data);
+            }
+          } else {
+            addr = _buildAddrFromNominatim(data);
+          }
+
+          _reverseGeocodeCache[key] = addr;
+          callback(addr);
+        })
+        .catch(function() {
+          var addr = _buildAddrFromNominatim(data);
+          _reverseGeocodeCache[key] = addr;
+          callback(addr);
+        });
+    })
+    .catch(function() { callback(null); });
+}
+
+function copyCtxAddress() {
+  const addrEl = document.getElementById('map-ctx-address-display');
+  const text = addrEl ? addrEl.textContent.trim() : '';
+  if (!text || text === 'Fetching address…' || text === 'Address not found') return;
+  const btn = document.getElementById('map-ctx-address-copy');
+  navigator.clipboard.writeText(text)
+    .then(function() {
+      if (btn) { btn.textContent = '✓'; setTimeout(function() { btn.textContent = '📋'; }, 1500); }
+      toast('Address copied', 'success');
+    })
+    .catch(function() {
+      // Fallback for browsers without clipboard API
+      const ta = document.createElement('textarea');
+      ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      try { document.execCommand('copy'); if (btn) { btn.textContent = '✓'; setTimeout(function() { btn.textContent = '📋'; }, 1500); } } catch(e) {}
+      document.body.removeChild(ta);
+    });
+}
 
 // ── CLOSE ATTRIBUTE TABLE ─────────────────────────────────────────────
 function closeAttrTable() {
@@ -3572,10 +3923,30 @@ function layerGeomIcon(layer) {
   }
   const gt = (layer.geomType || '').toLowerCase();
   if (gt.includes('point')) {
-    // Circle
-    return `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="8" cy="8" r="5" fill="${c}" stroke="${c}" stroke-width="0.5" opacity="0.9"/>
-    </svg>`;
+    const shape = layer.pointShape || 'circle';
+    const f = layer.noFill ? 'none' : c;
+    if (shape === 'square') {
+      return `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <rect x="3" y="3" width="10" height="10" rx="1" fill="${f}" stroke="${c}" stroke-width="1.5" opacity="0.9"/>
+      </svg>`;
+    } else if (shape === 'triangle') {
+      return `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <polygon points="8,2 14,14 2,14" fill="${f}" stroke="${c}" stroke-width="1.5" opacity="0.9"/>
+      </svg>`;
+    } else if (shape === 'diamond') {
+      return `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <polygon points="8,1 15,8 8,15 1,8" fill="${f}" stroke="${c}" stroke-width="1.5" opacity="0.9"/>
+      </svg>`;
+    } else if (shape === 'star') {
+      return `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <polygon points="8,1 9.9,6.1 15.5,6.1 11.1,9.4 12.7,14.7 8,11.4 3.3,14.7 4.9,9.4 0.5,6.1 6.1,6.1" fill="${f}" stroke="${c}" stroke-width="1" opacity="0.9"/>
+      </svg>`;
+    } else {
+      // Default circle
+      return `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="8" cy="8" r="5" fill="${c}" stroke="${c}" stroke-width="0.5" opacity="0.9"/>
+      </svg>`;
+    }
   }
   if (gt.includes('line')) {
     // Diagonal line with nodes
@@ -3796,11 +4167,21 @@ function openColorPickerForLayer(layerIdx) {
   document.getElementById('no-fill-btn').style.color = noFill ? '#fff' : '';
   _updateColorPreview(fillCol, outlineCol, noFill);
 
-  // Show point shape row only for point layers
+  // Sync outline width slider
+  const ow = layer.outlineWidth != null ? layer.outlineWidth : 1.5;
+  const owSlider = document.getElementById('outline-width-slider');
+  const owLabel  = document.getElementById('outline-width-label');
+  if (owSlider) owSlider.value = ow;
+  if (owLabel)  owLabel.textContent = ow + 'px';
+
+  // Show point shape + size rows only for point layers
   const isPointLayer = layer.geomType === 'Point' || layer.geomType === 'MultiPoint' ||
     (layer.geojson && (layer.geojson.features||[]).some(f => f.geometry?.type?.includes('Point')));
   const shapeRow = document.getElementById('point-shape-row');
+  const sizeRow  = document.getElementById('point-size-row');
   if (shapeRow) shapeRow.style.display = isPointLayer ? 'block' : 'none';
+  if (sizeRow)  sizeRow.style.display  = isPointLayer ? 'block' : 'none';
+
   if (isPointLayer) {
     const curShape = layer.pointShape || 'circle';
     ['circle','square','triangle'].forEach(s => {
@@ -3810,19 +4191,25 @@ function openColorPickerForLayer(layerIdx) {
         btn.style.background  = s === curShape ? '#e3f3fc' : '#edf0f3';
       }
     });
+    // Sync point size slider
+    const ps = layer.pointSize != null ? layer.pointSize : 14;
+    const psSlider = document.getElementById('point-size-slider');
+    const psLabel  = document.getElementById('point-size-label');
+    if (psSlider) psSlider.value = ps;
+    if (psLabel)  psLabel.textContent = ps + 'px';
   }
 
   // Build swatch grids
   _buildSwatches('fill-color-swatches', fillCol, (c) => applyFillColor(c));
   _buildSwatches('outline-color-swatches', outlineCol, (c) => applyOutlineColor(c));
 
-  // Position popup
+  // Position popup — taller now so allow more vertical room
   const layerEls = document.querySelectorAll('.layer-item');
   const targetEl = layerEls[layerIdx];
   if (targetEl) {
     const r = targetEl.getBoundingClientRect();
-    const left = Math.max(8, Math.min(r.left, window.innerWidth - 250));
-    const top  = Math.max(8, Math.min(r.bottom + 4, window.innerHeight - 330));
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - 220));
+    const top  = Math.max(8, Math.min(r.bottom + 4, window.innerHeight - 460));
     popup.style.left = left + 'px';
     popup.style.top  = top + 'px';
   } else {
@@ -3871,6 +4258,7 @@ function applyFillColor(color) {
   _applySymbologyToLeaflet(layer);
   _updateColorPreview(color, layer.outlineColor || layer.color, false);
   updateLayerList();
+  updateLegend();
 }
 
 function applyOutlineColor(color) {
@@ -3880,6 +4268,7 @@ function applyOutlineColor(color) {
   _applySymbologyToLeaflet(layer);
   _updateColorPreview(layer.fillColor || layer.color, color, layer.noFill || false);
   updateLayerList();
+  updateLegend();
 }
 
 function applyNoFill() {
@@ -3891,6 +4280,7 @@ function applyNoFill() {
   _applySymbologyToLeaflet(layer);
   _updateColorPreview(layer.fillColor || layer.color, layer.outlineColor || layer.color, layer.noFill);
   updateLayerList();
+  updateLegend();
 }
 
 function applyPointShape(shape) {
@@ -3905,6 +4295,23 @@ function applyPointShape(shape) {
   });
   _applySymbologyToLeaflet(layer);
   updateLayerList();
+  updateLegend();
+}
+
+function applyPointSize(size) {
+  const layer = state.layers[_colorPickerLayerIdx]; if (!layer) return;
+  layer.pointSize = size;
+  _applySymbologyToLeaflet(layer);
+  updateLayerList();
+  updateLegend();
+}
+
+function applyOutlineWidth(width) {
+  const layer = state.layers[_colorPickerLayerIdx]; if (!layer) return;
+  layer.outlineWidth = width;
+  _applySymbologyToLeaflet(layer);
+  updateLayerList();
+  updateLegend();
 }
 
 function _applySymbologyToLeaflet(layer) {
@@ -3913,6 +4320,7 @@ function _applySymbologyToLeaflet(layer) {
   const outlineCol = layer.outlineColor || layer.color;
   const noFill     = layer.noFill || false;
   const shape      = layer.pointShape || 'circle';
+  const outlineW   = layer.outlineWidth != null ? layer.outlineWidth : 1.5;
 
   // Check if any features are points
   const features = layer.geojson?.features || [];
@@ -3921,7 +4329,7 @@ function _applySymbologyToLeaflet(layer) {
   const hasLine    = features.some(f => f.geometry?.type?.includes('Line'));
 
   if (hasPoints && !hasPolygon && !hasLine) {
-    // Pure point layer — rebuild markers with new shape/colour
+    // Pure point layer — rebuild markers with new shape/colour/size
     _rebuildPointMarkers(layer);
   } else {
     // Non-point layer — use setStyle
@@ -3929,28 +4337,31 @@ function _applySymbologyToLeaflet(layer) {
       color: outlineCol,
       fillColor: fillCol,
       fillOpacity: noFill ? 0 : 0.25,
-      weight: 2
+      weight: outlineW
     });
   }
   updateLayerList();
 }
 
-function _makePointIcon(fillCol, outlineCol, noFill, shape, size) {
+function _makePointIcon(fillCol, outlineCol, noFill, shape, size, outlineWidth) {
   size = size || 12;
-  const s = size;
+  const s  = size;
   const fill   = noFill ? 'none' : fillCol;
   const stroke = outlineCol;
-  const sw = Math.max(1, s / 6);
+  // If outlineWidth explicitly provided use it, else auto-scale with icon size
+  const sw = outlineWidth != null ? outlineWidth : Math.max(1, s / 6);
   let svgShape;
   if (shape === 'square') {
-    const m = sw; const w = s - 2*m;
+    const m = sw / 2; const w = s - sw;
     svgShape = `<rect x="${m}" y="${m}" width="${w}" height="${w}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" rx="1"/>`;
   } else if (shape === 'triangle') {
-    const pts = `${s/2},${sw} ${s-sw},${s-sw} ${sw},${s-sw}`;
+    const pts = `${s/2},${sw/2} ${s-sw/2},${s-sw/2} ${sw/2},${s-sw/2}`;
     svgShape = `<polygon points="${pts}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`;
+  } else if (shape === 'diamond') {
+    svgShape = `<polygon points="${s/2},${sw/2} ${s-sw/2},${s/2} ${s/2},${s-sw/2} ${sw/2},${s/2}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`;
   } else {
     // circle (default)
-    const r = (s - 2*sw) / 2; const cx = s/2; const cy = s/2;
+    const r = (s - sw) / 2; const cx = s/2; const cy = s/2;
     svgShape = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`;
   }
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${s}" height="${s}" viewBox="0 0 ${s} ${s}">${svgShape}</svg>`;
@@ -3969,9 +4380,11 @@ function _rebuildPointMarkers(layer) {
   const outlineCol = layer.outlineColor || layer.color;
   const noFill     = layer.noFill || false;
   const shape      = layer.pointShape || 'circle';
+  const size       = layer.pointSize   != null ? layer.pointSize   : 14;
+  const outlineW   = layer.outlineWidth != null ? layer.outlineWidth : null; // null = auto from size
   layer.leafletLayer.eachLayer(function(sub) {
     if (sub.setIcon) {
-      sub.setIcon(_makePointIcon(fillCol, outlineCol, noFill, shape, 14));
+      sub.setIcon(_makePointIcon(fillCol, outlineCol, noFill, shape, size, outlineW));
     }
   });
 }
@@ -4173,24 +4586,37 @@ function _exportMapPNGWithTitle(userTitle) {
   }
 
   // ── Vector overlay (SVG paths — lines/polygons) ───────────────────────────
+  // FIX: Leaflet applies a CSS transform to the overlay pane for smooth panning.
+  // The SVG's internal path coordinates are already in the map's coordinate space.
+  // We must draw the SVG sized to the full map (W×H) at position (0, MAP_Y) so
+  // the paths land in the correct position. Using the SVG's getBoundingClientRect
+  // offset caused polygons to shift when the map had been panned.
   function drawVectors(cb) {
     const svgEl = mapEl.querySelector('.leaflet-overlay-pane svg');
     if (!svgEl) { cb(); return; }
-    const svgRect  = svgEl.getBoundingClientRect();
+
     const svgClone = svgEl.cloneNode(true);
     svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
-    svgClone.setAttribute('width',  svgRect.width);
-    svgClone.setAttribute('height', svgRect.height);
+    // Size the cloned SVG to the full map area so coordinates align correctly.
+    // The SVG's internal paths use coordinates relative to the map origin, so
+    // drawing at (0, MAP_Y) with full map dimensions ensures no shift.
+    svgClone.setAttribute('width',  W);
+    svgClone.setAttribute('height', H);
+    // Remove any leftover transform on the root SVG element that Leaflet may
+    // have applied for panning — it's already baked into getBoundingClientRect
+    // positioning which we are NOT using here.
+    svgClone.style.transform = '';
+    svgClone.removeAttribute('style');
+
     const dataURI = 'data:image/svg+xml;charset=utf-8,' +
       encodeURIComponent(new XMLSerializer().serializeToString(svgClone));
     const svgImg = new Image();
     const guard  = setTimeout(function() { svgImg.onload = svgImg.onerror = null; cb(); }, 3000);
     svgImg.onload = function() {
       clearTimeout(guard);
-      // Position relative to map div, offset into canvas by MAP_Y
-      const dx = Math.round(svgRect.left - rect.left);
-      const dy = Math.round(svgRect.top  - rect.top);
-      try { ctx.drawImage(svgImg, dx, MAP_Y + dy, svgRect.width, svgRect.height); } catch(e) {}
+      // Draw the SVG at the map's top-left corner in the canvas (no dx/dy offset
+      // needed — the paths already encode position relative to the map origin).
+      try { ctx.drawImage(svgImg, 0, MAP_Y, W, H); } catch(e) {}
       cb();
     };
     svgImg.onerror = function() { clearTimeout(guard); cb(); };
@@ -4413,6 +4839,992 @@ function _exportMapPNGWithTitle(userTitle) {
   }
 
   drawAllTiles(function() { drawVectors(function() { drawMarkers(finaliseAndSave); }); });
+}
+
+// ══════════════════════════════════════════════════
+// EXPORT MAP AS PNG
+// ══════════════════════════════════════════════════
+function exportMapPNG() {
+  // ── Step 0: Ask for title before doing any canvas work ───────────────────
+  const now0   = new Date();
+  const dd0    = String(now0.getDate()).padStart(2, '0');
+  const mm0    = String(now0.getMonth() + 1).padStart(2, '0');
+  const yyyy0  = now0.getFullYear();
+  const defaultTitle = 'Gaia Export — ' + dd0 + '-' + mm0 + '-' + yyyy0;
+
+  // Build a small modal
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:10600;display:flex;align-items:center;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:var(--bg2);border-radius:10px;width:380px;max-width:calc(100vw - 32px);
+                box-shadow:0 8px 40px rgba(0,0,0,0.3);overflow:hidden;">
+      <div style="background:linear-gradient(135deg,#0C2E44,#113c64);border-bottom:2px solid #14b1e7;
+                  padding:12px 16px;">
+        <div style="font-family:var(--mono);font-weight:700;font-size:11px;color:#e8f4fb;">
+          🖼 Export Map as PNG
+        </div>
+      </div>
+      <div style="padding:16px;">
+        <label style="font-family:var(--mono);font-size:9px;color:var(--text3);
+                      text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:5px;">
+          Map Title
+        </label>
+        <input id="png-title-input" type="text"
+          value="${defaultTitle}"
+          style="width:100%;box-sizing:border-box;padding:7px 10px;font-family:var(--mono);
+                 font-size:11px;border:1px solid var(--border);border-radius:5px;
+                 background:var(--bg);color:var(--text);outline:none;"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();document.getElementById('png-export-go').click();}
+                     if(event.key==='Escape'){this.closest('div[style*=fixed]').remove();}"/>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px;">
+          <button class="btn btn-ghost btn-sm" onclick="this.closest('div[style*=fixed]').remove()"
+            style="font-size:10px;">Cancel</button>
+          <button id="png-export-go" class="btn btn-primary btn-sm"
+            style="font-size:10px;"
+            onclick="
+              var t=document.getElementById('png-title-input').value.trim()||'${defaultTitle}';
+              this.closest('div[style*=fixed]').remove();
+              _exportMapPNGWithTitle(t);
+            ">Export PNG</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  // Select all text so user can immediately type a replacement
+  setTimeout(function() {
+    const inp = document.getElementById('png-title-input');
+    if (inp) { inp.focus(); inp.select(); }
+  }, 50);
+}
+
+function _exportMapPNGWithTitle(userTitle) {
+  toast('Preparing PNG export…', 'info');
+
+  const mapEl = document.getElementById('map');
+  if (!mapEl) { toast('Map element not found', 'error'); return; }
+
+  const rect = mapEl.getBoundingClientRect();
+  const W = Math.round(rect.width), H = Math.round(rect.height);
+  const isDark = document.body.classList.contains('dark-mode');
+
+  // ── Layout constants ───────────────────────────────────────────────────────
+  const TITLE_H  = 36;   // header bar height
+  const FOOTER_H = 28;   // footer bar height
+  const FULL_H   = H + TITLE_H + FOOTER_H;
+  const MAP_Y    = TITLE_H;   // where the map area starts (y)
+
+  const out = document.createElement('canvas');
+  out.width = W; out.height = FULL_H;
+  const ctx = out.getContext('2d', { willReadFrequently: true });
+
+  // ── Date strings (used in title + footer) ────────────────────────────────
+  const now  = new Date();
+  const dd   = String(now.getDate()).padStart(2, '0');
+  const mm   = String(now.getMonth() + 1).padStart(2, '0');
+  const yyyy = now.getFullYear();
+
+  // ── Title bar ─────────────────────────────────────────────────────────────
+  const grad = ctx.createLinearGradient(0, 0, W, 0);
+  grad.addColorStop(0, '#0C2E44');
+  grad.addColorStop(1, '#113c64');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, TITLE_H);
+  ctx.fillStyle = '#14b1e7';
+  ctx.fillRect(0, TITLE_H - 2, W, 2);
+
+  const titleText = userTitle;
+  ctx.fillStyle = '#e8f4fb';
+  ctx.font = 'bold 13px "IBM Plex Mono", monospace';
+  const tw = ctx.measureText(titleText).width;
+  ctx.fillText(titleText, Math.round(W / 2 - tw / 2), 23);
+
+  // ── Map background ────────────────────────────────────────────────────────
+  ctx.fillStyle = isDark ? '#111920' : '#f0f2f4';
+  ctx.fillRect(0, MAP_Y, W, H);
+
+  // ── CLIP to map area so nothing bleeds into title/footer ─────────────────
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(0, MAP_Y, W, H);
+  ctx.clip();
+
+  // ── Basemap tiles (fetched as blobs to avoid canvas taint) ────────────────
+  let tainted = false;
+
+  function drawAllTiles(done) {
+    const allImgs = Array.from(mapEl.querySelectorAll('.leaflet-map-pane img'));
+    if (!allImgs.length) { done(); return; }
+    let remaining = allImgs.length;
+    function finish() { if (--remaining === 0) done(); }
+    allImgs.forEach(function(img) {
+      const ir = img.getBoundingClientRect();
+      const x = Math.round(ir.left - rect.left);
+      const y = Math.round(ir.top  - rect.top);
+      const iw = Math.round(ir.width);
+      const ih = Math.round(ir.height);
+      if (!img.complete || !img.naturalWidth || x + iw <= 0 || y + ih <= 0 || x >= W || y >= H) { finish(); return; }
+      fetch(img.src)
+        .then(function(r) { return r.blob(); })
+        .then(function(blob) {
+          const objUrl = URL.createObjectURL(blob);
+          const tmp = new Image();
+          tmp.onload = function() {
+            try { ctx.drawImage(tmp, x, MAP_Y + y, iw, ih); } catch(e) { tainted = true; }
+            URL.revokeObjectURL(objUrl);
+            finish();
+          };
+          tmp.onerror = function() { URL.revokeObjectURL(objUrl); finish(); };
+          tmp.src = objUrl;
+        })
+        .catch(function() { finish(); });
+    });
+  }
+
+  // ── Rounded-rect helper ───────────────────────────────────────────────────
+  function rrect(c, x, y, w, h, r) {
+    c.beginPath();
+    c.moveTo(x + r, y);
+    c.lineTo(x + w - r, y);
+    c.quadraticCurveTo(x + w, y,     x + w, y + r);
+    c.lineTo(x + w, y + h - r);
+    c.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    c.lineTo(x + r, y + h);
+    c.quadraticCurveTo(x, y + h,     x, y + h - r);
+    c.lineTo(x, y + r);
+    c.quadraticCurveTo(x, y,         x + r, y);
+    c.closePath();
+  }
+
+  // ── Vector overlay (SVG paths — lines/polygons) ───────────────────────────
+  // FIX: Leaflet applies a CSS transform to the overlay pane for smooth panning.
+  // The SVG's internal path coordinates are already in the map's coordinate space.
+  // Draw the SVG sized to the full map (W×H) at position (0, MAP_Y) so paths
+  // land in the correct position — using getBoundingClientRect offset caused shift.
+  function drawVectors(cb) {
+    const svgEl = mapEl.querySelector('.leaflet-overlay-pane svg');
+    if (!svgEl) { cb(); return; }
+    const svgClone = svgEl.cloneNode(true);
+    svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    svgClone.setAttribute('width',  W);
+    svgClone.setAttribute('height', H);
+    svgClone.style.transform = '';
+    svgClone.removeAttribute('style');
+    const dataURI = 'data:image/svg+xml;charset=utf-8,' +
+      encodeURIComponent(new XMLSerializer().serializeToString(svgClone));
+    const svgImg = new Image();
+    const guard  = setTimeout(function() { svgImg.onload = svgImg.onerror = null; cb(); }, 3000);
+    svgImg.onload = function() {
+      clearTimeout(guard);
+      try { ctx.drawImage(svgImg, 0, MAP_Y, W, H); } catch(e) {}
+      cb();
+    };
+    svgImg.onerror = function() { clearTimeout(guard); cb(); };
+    svgImg.src = dataURI;
+  }
+
+  // ── Point markers (DivIcon SVG elements) ──────────────────────────────────
+  function drawMarkers(cb) {
+    const markerEls = Array.from(
+      mapEl.querySelectorAll('.leaflet-marker-pane .leaflet-marker-icon')
+    );
+    if (!markerEls.length) { cb(); return; }
+
+    const jobs = markerEls.map(function(el) {
+      const mr = el.getBoundingClientRect();
+      const x  = Math.round(mr.left - rect.left);
+      const y  = Math.round(mr.top  - rect.top);
+      const w  = Math.round(mr.width)  || 14;
+      const h  = Math.round(mr.height) || 14;
+      let svgStr = el.innerHTML.trim();
+      if (!svgStr) return null;
+      svgStr = svgStr.replace(/\s+xmlns="[^"]*"/g, '');
+      if (svgStr.startsWith('<svg')) {
+        svgStr = svgStr.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+      } else {
+        svgStr = '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '">' + svgStr + '</svg>';
+      }
+      return { x, y, w, h, svgStr };
+    }).filter(function(j) {
+      return j && j.svgStr && j.x + j.w > 0 && j.y + j.h > 0 && j.x < W && j.y < H;
+    });
+
+    if (!jobs.length) { cb(); return; }
+
+    let remaining = jobs.length;
+    function done() { if (--remaining <= 0) cb(); }
+
+    jobs.forEach(function(job) {
+      const dataURI = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(job.svgStr);
+      const img   = new Image();
+      const guard = setTimeout(function() { img.onload = img.onerror = null; done(); }, 1500);
+      img.onload = function() {
+        clearTimeout(guard);
+        try { ctx.drawImage(img, job.x, MAP_Y + job.y, job.w, job.h); } catch(e) {}
+        done();
+      };
+      img.onerror = function() { clearTimeout(guard); done(); };
+      img.src = dataURI;
+    });
+  }
+
+  // ── Legend (top-right of map area) ───────────────────────────────────────
+  function drawLegend() {
+    const mapBounds = state.map ? state.map.getBounds() : null;
+    const layers = (state.layers || []).filter(function(l) {
+      if (!l || l.isTile || !l.visible) return false;
+      if (!mapBounds) return true;
+      const feats = (l.geojson && l.geojson.features) || [];
+      if (!feats.length) return false;
+      return feats.some(function(f) {
+        if (!f || !f.geometry) return false;
+        try {
+          const lb = l.leafletLayer.getBounds ? l.leafletLayer.getBounds() : null;
+          if (lb) return mapBounds.overlaps(lb);
+        } catch(e) {}
+        return true;
+      });
+    });
+    if (!layers.length) return;
+
+    const rows = [];
+    layers.forEach(function(layer) {
+      if (layer.classified && layer.classifyClasses && layer.classifyClasses.length) {
+        rows.push({ label: layer.name, isHeader: true });
+        layer.classifyClasses.forEach(function(c) {
+          rows.push({ label: c.label, color: c.color,
+            isLine:  (layer.geomType||'').includes('Line'),
+            isPoint: (layer.geomType||'').includes('Point') });
+        });
+      } else {
+        const color   = layer.fillColor    || layer.color || '#3498db';
+        const outline = layer.outlineColor || layer.color || '#3498db';
+        rows.push({ label: layer.name,
+          color: layer.noFill ? 'transparent' : color,
+          outline, noFill: layer.noFill,
+          isLine:  (layer.geomType||'').includes('Line'),
+          isPoint: (layer.geomType||'').includes('Point'),
+          shape: layer.pointShape || 'circle' });
+      }
+    });
+    if (!rows.length) return;
+
+    const ROW_H = 18, PAD = 8, SW = 14, GAP = 6, MAX_W = 200;
+    const boxH  = rows.length * ROW_H + PAD * 2;
+    const boxX  = W - MAX_W - 10;
+    const boxY  = MAP_Y + 10;
+
+    ctx.fillStyle = 'rgba(255,255,255,0.93)';
+    ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+    ctx.lineWidth = 1;
+    rrect(ctx, boxX, boxY, MAX_W, boxH, 6);
+    ctx.fill(); ctx.stroke();
+
+    rows.forEach(function(row, i) {
+      const rowY = boxY + PAD + i * ROW_H;
+      const cy   = rowY + ROW_H / 2;
+      if (row.isHeader) {
+        ctx.fillStyle = '#0074a8';
+        ctx.font = 'bold 9px monospace';
+        ctx.fillText(String(row.label).substring(0, 26), boxX + PAD, cy + 4);
+        return;
+      }
+      const sx = boxX + PAD;
+      ctx.lineWidth = 1.5;
+      if (row.isLine) {
+        ctx.strokeStyle = row.color; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(sx, cy); ctx.lineTo(sx + SW, cy); ctx.stroke();
+      } else if (row.isPoint) {
+        ctx.fillStyle = row.noFill ? 'transparent' : row.color;
+        ctx.strokeStyle = row.outline || row.color;
+        ctx.beginPath();
+        if (row.shape === 'square') { ctx.rect(sx+1, cy-SW/2+1, SW-2, SW-2); }
+        else if (row.shape === 'triangle') {
+          ctx.moveTo(sx+SW/2, cy-SW/2+1); ctx.lineTo(sx+SW-1, cy+SW/2-1); ctx.lineTo(sx+1, cy+SW/2-1); ctx.closePath();
+        } else { ctx.arc(sx+SW/2, cy, SW/2-1, 0, Math.PI*2); }
+        ctx.fill(); ctx.stroke();
+      } else {
+        ctx.fillStyle = row.noFill ? 'rgba(0,0,0,0)' : row.color;
+        ctx.strokeStyle = row.outline || row.color;
+        rrect(ctx, sx, cy-SW/2+1, SW+2, SW-2, 2);
+        if (!row.noFill) ctx.fill(); ctx.stroke();
+      }
+      ctx.lineWidth = 1;
+      ctx.fillStyle = '#2c3e50';
+      ctx.font = '10px monospace';
+      ctx.fillText(String(row.label).substring(0, 26), sx + SW + GAP, cy + 4);
+    });
+  }
+
+  // ── Release clip, then draw overlaid UI elements ──────────────────────────
+  function drawOverlays() {
+    ctx.restore();  // release the map-area clip
+    try { drawLegend(); } catch(e) { console.warn('Legend:', e); }
+  }
+
+  // ── Footer bar ────────────────────────────────────────────────────────────
+  function drawFooter() {
+    const footerY = MAP_Y + H;
+    ctx.fillStyle = '#1c2b3a';
+    ctx.fillRect(0, footerY, W, FOOTER_H);
+    ctx.fillStyle = '#14b1e7';
+    ctx.fillRect(0, footerY, W, 1);
+
+    const scale = document.getElementById('scale-display')?.textContent || '';
+    const zoom  = state.map ? Math.round(state.map.getZoom()) : '';
+    ctx.fillStyle = '#7a96aa';
+    ctx.font = '10px monospace';
+    ctx.fillText('Scale 1:' + scale + '  |  Zoom ' + zoom, 10, footerY + 18);
+
+    const dateStr = dd + ' ' + ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][now.getMonth()] + ' ' + yyyy;
+    ctx.fillStyle = '#a0bbc8';
+    ctx.font = '10px monospace';
+    const dw = ctx.measureText(dateStr).width;
+    ctx.fillText(dateStr, Math.round(W / 2 - dw / 2), footerY + 18);
+
+    ctx.fillStyle = '#14b1e7';
+    ctx.font = 'bold 10px monospace';
+    const gw = ctx.measureText('Gaia v1.0').width;
+    ctx.fillText('Gaia v1.0', W - gw - 10, footerY + 18);
+  }
+
+  // ── Logo + finalise ───────────────────────────────────────────────────────
+  function finaliseAndSave() {
+    drawOverlays();
+    drawFooter();
+
+    const logoImg = new Image();
+    const guard2  = setTimeout(function() { doDownload(); }, 1500);
+    logoImg.onload = function() {
+      clearTimeout(guard2);
+      const lh = TITLE_H - 10;
+      const lw = Math.round(logoImg.naturalWidth * (lh / logoImg.naturalHeight));
+      try { ctx.drawImage(logoImg, 10, 5, lw, lh); } catch(e) {}
+      doDownload();
+    };
+    logoImg.onerror = function() { clearTimeout(guard2); doDownload(); };
+    logoImg.src = 'data:image/png;base64,' + _UMWELT_LOGO_B64;
+  }
+
+  function doDownload() {
+    const filename = 'gaia-export-' + dd + '-' + mm + '-' + yyyy + '.png';
+    function dl(url, revoke) {
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      if (revoke) setTimeout(function() { URL.revokeObjectURL(url); }, 1500);
+      toast('Exported \u2713', 'success');
+    }
+    try {
+      out.toBlob(function(blob) {
+        if (blob) dl(URL.createObjectURL(blob), true);
+        else      dl(out.toDataURL('image/png'), false);
+      }, 'image/png');
+    } catch(e) {
+      toast('PNG export failed: ' + e.message, 'error');
+    }
+  }
+
+  drawAllTiles(function() { drawVectors(function() { drawMarkers(finaliseAndSave); }); });
+}
+
+// ══════════════════════════════════════════════════
+// PDF TEMPLATE EXPORT
+// Uses pdf-lib (loaded from CDN) to overlay the map
+// PNG onto the embedded Umwelt A4-landscape template.
+//
+// Template layout (PDF coords, origin = bottom-left):
+//   Page:       842 × 595 pt  (A4 landscape)
+//   Map area:   x=0..676, y=15..567  (676 × 552 pt)
+//   Right panel: x=676..842 — figure title, legend,
+//                scale bar, Umwelt logo, disclaimer
+// ══════════════════════════════════════════════════
+function exportMapPDFTemplate() {
+  // ── Step 1: Ask for figure number and title ──────────────────────────────
+  const now0 = new Date();
+  const dd0  = String(now0.getDate()).padStart(2,'0');
+  const mm0  = String(now0.getMonth()+1).padStart(2,'0');
+  const yyyy0 = now0.getFullYear();
+  const defaultTitle  = 'Figure Title';
+  const defaultFigNum = '1.1';
+
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10700;display:flex;align-items:center;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:var(--bg2);border-radius:10px;width:400px;max-width:calc(100vw - 32px);
+                box-shadow:0 8px 40px rgba(0,0,0,0.4);overflow:hidden;">
+      <div style="background:linear-gradient(135deg,#0C2E44,#113c64);border-bottom:2px solid #14b1e7;
+                  padding:12px 16px;">
+        <div style="font-family:var(--mono);font-weight:700;font-size:11px;color:#e8f4fb;">
+          📄 Export Map — Umwelt PDF Template
+        </div>
+      </div>
+      <div style="padding:16px;display:flex;flex-direction:column;gap:10px;">
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--text3);
+                        text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">
+            Figure Number (e.g. 1.1)
+          </label>
+          <input id="pdf-fignum-input" type="text" value="${defaultFigNum}"
+            style="width:100%;box-sizing:border-box;padding:7px 10px;font-family:var(--mono);
+                   font-size:11px;border:1px solid var(--border);border-radius:5px;
+                   background:var(--bg);color:var(--text);outline:none;"/>
+        </div>
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--text3);
+                        text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">
+            Figure Title
+          </label>
+          <input id="pdf-title-input" type="text" value="${defaultTitle}"
+            style="width:100%;box-sizing:border-box;padding:7px 10px;font-family:var(--mono);
+                   font-size:11px;border:1px solid var(--border);border-radius:5px;
+                   background:var(--bg);color:var(--text);outline:none;"/>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px;">
+          <button class="btn btn-ghost btn-sm" onclick="this.closest('div[style*=fixed]').remove()"
+            style="font-size:10px;">Cancel</button>
+          <button id="pdf-export-go" class="btn btn-primary btn-sm"
+            style="font-size:10px;"
+            onclick="
+              var figNum = document.getElementById('pdf-fignum-input').value.trim() || '${defaultFigNum}';
+              var figTitle = document.getElementById('pdf-title-input').value.trim() || '${defaultTitle}';
+              this.closest('div[style*=fixed]').remove();
+              _exportMapPDFWithTemplate(figNum, figTitle);
+            ">Export PDF</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  setTimeout(function() {
+    const inp = document.getElementById('pdf-title-input');
+    if (inp) { inp.focus(); inp.select(); }
+  }, 50);
+}
+
+function _exportMapPDFWithTemplate(figNum, figTitle) {
+  if (typeof PDFLib === 'undefined') {
+    toast('pdf-lib not loaded — check your internet connection', 'error');
+    return;
+  }
+
+  toast('Preparing PDF export…', 'info');
+
+  const mapEl = document.getElementById('map');
+  if (!mapEl) { toast('Map element not found', 'error'); return; }
+
+  const rect = mapEl.getBoundingClientRect();
+  const W = Math.round(rect.width);
+  const H = Math.round(rect.height);
+
+  // ── Work out the PDF frame aspect ratio and expand the canvas to match ──────
+  // PDF map frame: (676 - 14.17) × (595.28 - 14.17×2) = 661.83 × 566.94 pt
+  // Aspect ratio ≈ 1.1675 (slightly taller relative to width than typical browser)
+  const PDF_MAP_W = 676 - 14.17;
+  const PDF_MAP_H = 595.28 - 14.17 * 2;
+  const pdfAspect = PDF_MAP_W / PDF_MAP_H;   // ~1.167
+
+  // Canvas width stays at W (browser map width). Height is expanded to match
+  // the PDF frame aspect so we capture more map extent vertically.
+  const CW = W;
+  const CH = Math.round(W / pdfAspect);       // taller than the browser window
+
+  // How much extra we need above/below the current browser view
+  const extraH = CH - H;   // pixels to expand (may be negative if browser is taller)
+  const padTop    = Math.max(0, Math.round(extraH / 2));
+  const padBottom = Math.max(0, extraH - padTop);
+
+  // The browser map element's top-left relative to our expanded canvas
+  const mapOffsetX = 0;
+  const mapOffsetY = padTop;   // map sits padTop px from the top of the canvas
+
+  // ── Build the offscreen canvas at the expanded size ─────────────────────────
+  const offscreen = document.createElement('canvas');
+  offscreen.width  = CW;
+  offscreen.height = CH;
+  const ctx = offscreen.getContext('2d', { willReadFrequently: true });
+  const isDark = document.body.classList.contains('dark-mode');
+  ctx.fillStyle = isDark ? '#111920' : '#f0f2f4';
+  ctx.fillRect(0, 0, CW, CH);
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, CW, CH); ctx.clip();
+
+  function drawAllTiles(done) {
+    const allImgs = Array.from(mapEl.querySelectorAll('.leaflet-map-pane img'));
+    if (!allImgs.length) { done(); return; }
+    let remaining = allImgs.length;
+    function finish() { if (--remaining === 0) done(); }
+    allImgs.forEach(function(img) {
+      const ir = img.getBoundingClientRect();
+      // Offset by mapOffsetY to place within expanded canvas
+      const x = Math.round(ir.left - rect.left) + mapOffsetX;
+      const y = Math.round(ir.top  - rect.top)  + mapOffsetY;
+      const iw = Math.round(ir.width), ih = Math.round(ir.height);
+      if (!img.complete || !img.naturalWidth || x+iw<=0 || y+ih<=0 || x>=CW || y>=CH) { finish(); return; }
+      fetch(img.src).then(function(r){return r.blob();}).then(function(blob){
+        const objUrl = URL.createObjectURL(blob);
+        const tmp = new Image();
+        tmp.onload = function() { try{ctx.drawImage(tmp,x,y,iw,ih);}catch(e){} URL.revokeObjectURL(objUrl); finish(); };
+        tmp.onerror = function() { URL.revokeObjectURL(objUrl); finish(); };
+        tmp.src = objUrl;
+      }).catch(function(){finish();});
+    });
+  }
+
+  function drawVectors(cb) {
+    const svgEl = mapEl.querySelector('.leaflet-overlay-pane svg');
+    if (!svgEl) { cb(); return; }
+    const svgClone = svgEl.cloneNode(true);
+    svgClone.setAttribute('xmlns','http://www.w3.org/2000/svg');
+    // SVG paths are in the map's coordinate space — offset with a <g> translate
+    // so they land at the right position in the expanded canvas
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.setAttribute('transform','translate('+mapOffsetX+','+mapOffsetY+')');
+    // Move all children of svgClone into g
+    while (svgClone.firstChild) g.appendChild(svgClone.firstChild);
+    svgClone.appendChild(g);
+    svgClone.setAttribute('width', CW); svgClone.setAttribute('height', CH);
+    svgClone.style.transform = ''; svgClone.removeAttribute('style');
+    const dataURI = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(svgClone));
+    const svgImg = new Image();
+    const guard = setTimeout(function(){svgImg.onload=svgImg.onerror=null;cb();},3000);
+    svgImg.onload = function() { clearTimeout(guard); try{ctx.drawImage(svgImg,0,0,CW,CH);}catch(e){} cb(); };
+    svgImg.onerror = function() { clearTimeout(guard); cb(); };
+    svgImg.src = dataURI;
+  }
+
+  function drawMarkers(cb) {
+    const markerEls = Array.from(mapEl.querySelectorAll('.leaflet-marker-pane .leaflet-marker-icon'));
+    if (!markerEls.length) { cb(); return; }
+    const jobs = markerEls.map(function(el) {
+      const mr = el.getBoundingClientRect();
+      const x = Math.round(mr.left - rect.left) + mapOffsetX;
+      const y = Math.round(mr.top  - rect.top)  + mapOffsetY;
+      const w = Math.round(mr.width)||14, h = Math.round(mr.height)||14;
+      let svgStr = el.innerHTML.trim(); if (!svgStr) return null;
+      svgStr = svgStr.replace(/\s+xmlns="[^"]*"/g,'');
+      if (svgStr.startsWith('<svg')) svgStr = svgStr.replace('<svg','<svg xmlns="http://www.w3.org/2000/svg"');
+      else svgStr = '<svg xmlns="http://www.w3.org/2000/svg" width="'+w+'" height="'+h+'">'+svgStr+'</svg>';
+      return {x,y,w,h,svgStr};
+    }).filter(function(j){return j&&j.svgStr&&j.x+j.w>0&&j.y+j.h>0&&j.x<CW&&j.y<CH;});
+    if (!jobs.length){cb();return;}
+    let remaining=jobs.length;
+    function done(){if(--remaining<=0)cb();}
+    jobs.forEach(function(job){
+      const dataURI='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(job.svgStr);
+      const img=new Image(); const guard=setTimeout(function(){img.onload=img.onerror=null;done();},1500);
+      img.onload=function(){clearTimeout(guard);try{ctx.drawImage(img,job.x,job.y,job.w,job.h);}catch(e){}done();};
+      img.onerror=function(){clearTimeout(guard);done();}; img.src=dataURI;
+    });
+  }
+
+  // ── Compute real-world scale from Leaflet ────────────────────────────────────
+  function getMapScaleInfo() {
+    if (!state.map) return { scaleStr: 'Unknown', kmPerPt: 1 };
+    const bounds = state.map.getBounds();
+    const center = state.map.getCenter();
+    // Earth radius in km
+    const R = 6371;
+    // Width of map in km using Haversine
+    const lon1 = bounds.getWest() * Math.PI / 180;
+    const lon2 = bounds.getEast() * Math.PI / 180;
+    const lat  = center.lat    * Math.PI / 180;
+    const dLon = lon2 - lon1;
+    const a = Math.cos(lat) * Math.cos(lat) * Math.sin(dLon/2) * Math.sin(dLon/2);
+    const mapWidthKm = 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    // Map width in pt on the PDF (676 - 14.17pt margin)
+    const MAP_W_PT = 676 - 14.17;
+    const kmPerPt = mapWidthKm / MAP_W_PT;
+    // Representative scale: 1 pt = kmPerPt km; 1 cm = kmPerPt * 28.35 km
+    // Scale denominator: screen pt / real pt. 1 pt = 1/72 inch = 0.0353 cm
+    const ptToCm = 2.54 / 72;
+    const scaleDenom = (kmPerPt * 1e5) / ptToCm; // 1 cm on map = scaleDenom cm in reality
+    // Nice round scale
+    const niceScales = [500,1000,2000,5000,10000,20000,25000,50000,100000,200000,250000,500000,1000000,2000000,5000000,10000000];
+    let bestScale = niceScales[0];
+    niceScales.forEach(function(s) { if (Math.abs(s - scaleDenom) < Math.abs(bestScale - scaleDenom)) bestScale = s; });
+    const scaleStr = '1:' + bestScale.toLocaleString();
+    // Scale bar length: pick a nice km value that fits comfortably (target ~30% of MAP_W_PT)
+    const targetPt = MAP_W_PT * 0.33;
+    const targetKm = targetPt * kmPerPt;
+    const niceKm = [0.1,0.2,0.5,1,2,5,10,20,50,100,200,500,1000,2000,5000];
+    let barKm = niceKm[0];
+    niceKm.forEach(function(k){ if(Math.abs(k-targetKm)<Math.abs(barKm-targetKm)) barKm=k; });
+    const barPt = barKm / kmPerPt;
+    return { scaleStr, barKm, barPt, kmPerPt };
+  }
+
+  // ── Build legend data from loaded layers ─────────────────────────────────────
+  function getLegendRows() {
+    if (!state || !state.layers) return [];
+    const rows = [];
+    (state.layers || []).forEach(function(layer) {
+      if (!layer || layer.isTile || !layer.visible) return;
+      if (layer.classified && layer.classifyClasses && layer.classifyClasses.length) {
+        rows.push({ label: layer.name, isHeader: true });
+        layer.classifyClasses.forEach(function(c) {
+          rows.push({ label: c.label, color: c.color,
+            isLine:  (layer.geomType||'').includes('Line'),
+            isPoint: (layer.geomType||'').includes('Point') });
+        });
+      } else {
+        const color   = layer.fillColor    || layer.color || '#3498db';
+        const outline = layer.outlineColor || layer.color || '#3498db';
+        rows.push({ label: layer.name,
+          color: layer.noFill ? null : color,
+          outline, noFill: layer.noFill,
+          isLine:  (layer.geomType||'').includes('Line'),
+          isPoint: (layer.geomType||'').includes('Point'),
+          shape: layer.pointShape || 'circle' });
+      }
+    });
+    return rows;
+  }
+
+  // ── Helper: hex color → pdf-lib rgb ─────────────────────────────────────────
+  function hexToRgb(hex) {
+    const { rgb } = PDFLib;
+    if (!hex || hex === 'transparent') return rgb(0.5, 0.5, 0.5);
+    const h = hex.replace('#','');
+    const r = parseInt(h.substring(0,2),16)/255;
+    const g = parseInt(h.substring(2,4),16)/255;
+    const b = parseInt(h.substring(4,6),16)/255;
+    return rgb(r, g, b);
+  }
+
+  // ── Build the PDF from scratch ───────────────────────────────────────────────
+  // mapPngBytes: Uint8Array of the PNG file bytes (not a data URL)
+  function buildPDF(mapPngBytes) {
+    const { PDFDocument, rgb, StandardFonts } = PDFLib;
+
+    // Page dimensions: A4 landscape
+    const PAGE_W = 841.89;
+    const PAGE_H = 595.28;
+
+    // 0.5cm margin in pt (0.5cm = 0.5/2.54*72 = 14.17pt)
+    const MARGIN = 14.17;
+
+    // Map area: inset by margin on left, top, bottom; right edge is fixed
+    const MAP_X = MARGIN;
+    const MAP_Y = MARGIN;
+    const MAP_W = 676 - MARGIN;          // right edge still at 676pt
+    const MAP_H = PAGE_H - MARGIN * 2;   // inset top and bottom
+
+    // Right panel
+    const PANEL_X = 676;
+    const PANEL_W = PAGE_W - PANEL_X;  // ~165.89 pt
+
+    const DARK_BLUE = rgb(0.047, 0.118, 0.196);
+    const ACCENT    = rgb(0.078, 0.694, 0.906);
+    const TEXT_DARK = rgb(0.12,  0.18,  0.26);
+    const TEXT_MED  = rgb(0.38,  0.42,  0.47);
+    const WHITE     = rgb(1, 1, 1);
+    const BORDER    = rgb(0.82,  0.84,  0.86);
+
+    // ── Bottom-up layout constants ─────────────────────────────────────────────
+    // Work from the bottom of the page upward so nothing overlaps.
+    const DISC_FONT_SIZE = 4.5;
+    const DISC_LINE_H    = 6.5;
+    const DISC_BOTTOM    = 4;    // pt from bottom of page
+    // Disclaimer: ~8 lines max at PANEL_W-12 width
+    const DISC_LINES_MAX = 8;
+    const DISC_TOP       = DISC_BOTTOM + DISC_LINES_MAX * DISC_LINE_H; // ~56
+
+    const LOGO_H    = 22;
+    const LOGO_GAP  = 5;
+    const LOGO_Y    = DISC_TOP + LOGO_GAP;                   // ~61
+    const LOGO_TOP  = LOGO_Y + LOGO_H;                       // ~83
+
+    const DIVIDER2_Y = LOGO_TOP + 6;                         // ~89
+
+    // Scale bar block: divider → bar → labels → scale text → WGS84
+    // Total height: 4(bar) + 7(labels) + 7(km) + 7(scale) + 7(crs) = 32pt + 10 padding = 42
+    const SCALE_BLOCK_H  = 44;
+    const SCALE_TOP_Y    = DIVIDER2_Y + SCALE_BLOCK_H;       // ~133
+
+    // Legend clamps above SCALE_TOP_Y
+    const LEG_MAX_Y      = SCALE_TOP_Y;
+
+    PDFDocument.create().then(function(pdfDoc) {
+      const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
+
+      if (!mapPngBytes || mapPngBytes.length < 8) {
+        throw new Error('Map PNG bytes are empty');
+      }
+
+      const logoSrc = (typeof _UMWELT_LOGO_2024_B64 !== 'undefined')
+        ? _UMWELT_LOGO_2024_B64 : _UMWELT_LOGO_B64;
+      const logoBytes = Uint8Array.from(atob(logoSrc), function(c){return c.charCodeAt(0);});
+
+      return Promise.all([
+        pdfDoc.embedFont(StandardFonts.HelveticaBold),
+        pdfDoc.embedFont(StandardFonts.Helvetica),
+        pdfDoc.embedPng(mapPngBytes),
+        pdfDoc.embedPng(logoBytes),
+      ]).then(function(results) {
+        const boldFont  = results[0];
+        const regFont   = results[1];
+        const mapImage  = results[2];
+        const logoImage = results[3];
+
+        // Word-wrap helper (defined early, used throughout)
+        function wrapText(text, font, size, maxW) {
+          const words = text.split(' ');
+          const lines = []; let line = '';
+          words.forEach(function(word) {
+            const test = line ? line + ' ' + word : word;
+            try {
+              if (font.widthOfTextAtSize(test, size) <= maxW) { line = test; }
+              else { if (line) lines.push(line); line = word; }
+            } catch(e) { line = test; }
+          });
+          if (line) lines.push(line);
+          return lines;
+        }
+
+        // ── 1. White page background ─────────────────────────────────────────
+        page.drawRectangle({ x:0, y:0, width:PAGE_W, height:PAGE_H, color:WHITE });
+
+        // ── 2. Map image — stretch to fill the full frame ────────────────────
+        // Always fill the entire map frame. A map viewport doesn't need
+        // aspect-ratio preservation — stretching slightly to fill the box
+        // is far better than leaving empty bars at top and bottom.
+        page.drawImage(mapImage, {x:MAP_X, y:MAP_Y, width:MAP_W, height:MAP_H});
+
+        // ── 3. Map box border (4 lines, no fill) ────────────────────────────
+        page.drawLine({start:{x:MAP_X,        y:MAP_Y       }, end:{x:MAP_X+MAP_W, y:MAP_Y       }, thickness:0.5, color:rgb(0.25,0.25,0.25)});
+        page.drawLine({start:{x:MAP_X,        y:MAP_Y+MAP_H }, end:{x:MAP_X+MAP_W, y:MAP_Y+MAP_H }, thickness:0.5, color:rgb(0.25,0.25,0.25)});
+        page.drawLine({start:{x:MAP_X,        y:MAP_Y       }, end:{x:MAP_X,        y:MAP_Y+MAP_H }, thickness:0.5, color:rgb(0.25,0.25,0.25)});
+        page.drawLine({start:{x:MAP_X+MAP_W,  y:MAP_Y       }, end:{x:MAP_X+MAP_W,  y:MAP_Y+MAP_H }, thickness:0.5, color:rgb(0.25,0.25,0.25)});
+
+        // ── 4. Right panel background ────────────────────────────────────────
+        page.drawRectangle({x:PANEL_X, y:0, width:PANEL_W, height:PAGE_H, color:WHITE});
+
+        // ── 5. Header bar (dark blue) ────────────────────────────────────────
+        const HEADER_H = 52;
+        page.drawRectangle({x:PANEL_X, y:PAGE_H-HEADER_H, width:PANEL_W, height:HEADER_H, color:DARK_BLUE});
+        // Accent line at bottom of header
+        page.drawLine({start:{x:PANEL_X,y:PAGE_H-HEADER_H},end:{x:PAGE_W,y:PAGE_H-HEADER_H},
+          thickness:2, color:ACCENT});
+
+        // ── 6. Figure number ─────────────────────────────────────────────────
+        page.drawText('FIGURE ' + figNum, {
+          x:PANEL_X+8, y:PAGE_H-18, size:11, font:boldFont, color:WHITE
+        });
+
+        // ── 7. Figure title ──────────────────────────────────────────────────
+        const TITLE_Y_START = PAGE_H - HEADER_H - 16;
+        const titleLines = wrapText(figTitle, boldFont, 10, PANEL_W-16);
+        titleLines.forEach(function(tl,i){
+          page.drawText(tl, {x:PANEL_X+8, y:TITLE_Y_START-i*13, size:10, font:boldFont, color:DARK_BLUE});
+        });
+
+        // ── 8. Divider under title ───────────────────────────────────────────
+        const afterTitle = TITLE_Y_START - titleLines.length * 13 - 6;
+        page.drawLine({start:{x:PANEL_X+4,y:afterTitle},end:{x:PAGE_W-4,y:afterTitle},
+          thickness:0.5, color:BORDER});
+
+        // ── 9. Legend ────────────────────────────────────────────────────────
+        const LEG_LABEL_Y = afterTitle - 12;
+        page.drawText('Legend', {x:PANEL_X+8, y:LEG_LABEL_Y, size:8, font:boldFont, color:TEXT_DARK});
+
+        const legendRows = getLegendRows();
+        const ROW_H=12, SW=9, GAP=5;
+        const LEG_START_Y = LEG_LABEL_Y - 10;
+
+        legendRows.forEach(function(row, i) {
+          const rowY = LEG_START_Y - i*ROW_H;
+          if (rowY < LEG_MAX_Y) return; // clamp above scale section
+          if (row.isHeader) {
+            page.drawText(String(row.label).substring(0,22),
+              {x:PANEL_X+8, y:rowY, size:7, font:boldFont, color:ACCENT});
+            return;
+          }
+          const sx=PANEL_X+8, cy=rowY+ROW_H/2-2;
+          if (row.isLine) {
+            page.drawLine({start:{x:sx,y:cy},end:{x:sx+SW,y:cy},thickness:2,color:hexToRgb(row.color)});
+          } else if (row.isPoint) {
+            const fillC = row.noFill ? WHITE : hexToRgb(row.color);
+            page.drawEllipse({x:sx+SW/2,y:cy,xScale:SW/2-0.5,yScale:SW/2-0.5,
+              color:fillC, borderColor:hexToRgb(row.outline||row.color), borderWidth:0.8});
+          } else {
+            const fillC = row.noFill ? WHITE : hexToRgb(row.color);
+            page.drawRectangle({x:sx,y:cy-SW/2+1,width:SW+1,height:SW-1,
+              color:fillC, borderColor:hexToRgb(row.outline||row.color), borderWidth:0.8});
+          }
+          page.drawText(String(row.label).substring(0,21),
+            {x:sx+SW+GAP, y:rowY, size:7, font:regFont, color:TEXT_DARK});
+        });
+
+        // ── 10. Scale bar (anchored above logo) ──────────────────────────────
+        // Work bottom-up: divider at DIVIDER2_Y, scale content above it
+        page.drawLine({start:{x:PANEL_X+4,y:DIVIDER2_Y},end:{x:PAGE_W-4,y:DIVIDER2_Y},
+          thickness:0.5, color:BORDER});
+
+        const scaleInfo = getMapScaleInfo();
+        const BAR_X  = PANEL_X + 8;
+        const barPt  = Math.min(scaleInfo.barPt || 80, PANEL_W - 40);
+        const barKm  = scaleInfo.barKm || 100;
+
+        // CRS and scale ratio at bottom of scale block (just above divider)
+        const CRS_Y    = DIVIDER2_Y + 8;
+        const SCALE_Y  = CRS_Y + 8;
+        const KM_Y     = SCALE_Y + 8;
+        const LABEL_Y  = KM_Y + 8;    // tick labels under bar
+        const BAR_Y    = LABEL_Y + 8; // bar itself
+
+        page.drawText('WGS84',
+          {x:BAR_X, y:CRS_Y, size:6, font:regFont, color:TEXT_MED});
+        page.drawText(scaleInfo.scaleStr + ' at A4',
+          {x:BAR_X, y:SCALE_Y, size:6, font:regFont, color:TEXT_MED});
+        page.drawText('Kilometres',
+          {x:BAR_X, y:KM_Y, size:6, font:regFont, color:TEXT_MED});
+
+        // Tick labels
+        const labelKm = barKm >= 1 ? barKm + ' km' : (barKm*1000).toFixed(0) + ' m';
+        page.drawText('0',      {x:BAR_X-1,       y:LABEL_Y, size:6, font:regFont, color:TEXT_DARK});
+        page.drawText(labelKm, {x:BAR_X+barPt-4, y:LABEL_Y, size:6, font:regFont, color:TEXT_DARK});
+
+        // Two-tone scale bar
+        const SEG = barPt / 2;
+        page.drawRectangle({x:BAR_X,     y:BAR_Y, width:SEG, height:4, color:rgb(0.2,0.2,0.2)});
+        page.drawRectangle({x:BAR_X+SEG, y:BAR_Y, width:SEG, height:4, color:WHITE});
+        // Outline whole bar
+        page.drawLine({start:{x:BAR_X,y:BAR_Y},      end:{x:BAR_X+barPt,y:BAR_Y},      thickness:0.4,color:rgb(0.2,0.2,0.2)});
+        page.drawLine({start:{x:BAR_X,y:BAR_Y+4},    end:{x:BAR_X+barPt,y:BAR_Y+4},    thickness:0.4,color:rgb(0.2,0.2,0.2)});
+        page.drawLine({start:{x:BAR_X,y:BAR_Y},      end:{x:BAR_X,y:BAR_Y+4},          thickness:0.4,color:rgb(0.2,0.2,0.2)});
+        page.drawLine({start:{x:BAR_X+SEG,y:BAR_Y},  end:{x:BAR_X+SEG,y:BAR_Y+4},      thickness:0.4,color:rgb(0.2,0.2,0.2)});
+        page.drawLine({start:{x:BAR_X+barPt,y:BAR_Y},end:{x:BAR_X+barPt,y:BAR_Y+4},   thickness:0.4,color:rgb(0.2,0.2,0.2)});
+
+        // ── 11. North arrow (right of scale bar) ─────────────────────────────
+        const NA_X = PANEL_X + PANEL_W - 16;
+        const NA_Y = DIVIDER2_Y + 28;
+        page.drawSvgPath('M 0 -9 L 4 4 L 0 2 L -4 4 Z',
+          {x:NA_X, y:NA_Y, color:rgb(0.15,0.15,0.15), borderColor:rgb(0.15,0.15,0.15), borderWidth:0.4});
+        page.drawText('N', {x:NA_X-3, y:NA_Y-16, size:7, font:boldFont, color:TEXT_DARK});
+
+        // ── 12. Divider above logo ───────────────────────────────────────────
+        page.drawLine({start:{x:PANEL_X+4,y:LOGO_TOP+4},end:{x:PAGE_W-4,y:LOGO_TOP+4},
+          thickness:0.5, color:BORDER});
+
+        // ── 13. Umwelt logo ──────────────────────────────────────────────────
+        const logoAspect = logoImage.width / logoImage.height;
+        const logoH = LOGO_H;
+        const logoW = Math.min(logoH * logoAspect, PANEL_W - 16);
+        page.drawImage(logoImage, {x:PANEL_X+8, y:LOGO_Y, width:logoW, height:logoH});
+
+        // ── 14. Disclaimer ───────────────────────────────────────────────────
+        const disclaimer =
+          'This document and the information are subject to Terms and Conditions and ' +
+          'Umwelt (Australia) Pty Ltd ("Umwelt") Copyright. Information is the property ' +
+          'of Umwelt. Solely for the use of the authorised recipient. Umwelt makes no ' +
+          'representation, undertakes no duty and accepts no responsibility to any third ' +
+          'party. APPROVED FOR AND ON BEHALF OF Umwelt';
+        const discLines = wrapText(disclaimer, regFont, DISC_FONT_SIZE, PANEL_W-12);
+        discLines.slice(0, DISC_LINES_MAX).forEach(function(dl,i){
+          page.drawText(dl, {x:PANEL_X+6, y:DISC_BOTTOM+(DISC_LINES_MAX-1-i)*DISC_LINE_H,
+            size:DISC_FONT_SIZE, font:regFont, color:TEXT_MED});
+        });
+
+        // ── 15. Panel separator ──────────────────────────────────────────────
+        page.drawLine({start:{x:PANEL_X,y:0},end:{x:PANEL_X,y:PAGE_H},
+          thickness:0.75, color:rgb(0.2,0.2,0.2)});
+
+        // ── 16. Download ─────────────────────────────────────────────────────
+        return pdfDoc.save().then(function(pdfBytes){
+          const blob = new Blob([pdfBytes],{type:'application/pdf'});
+          const url  = URL.createObjectURL(blob);
+          const now2 = new Date();
+          const fn   = 'figure-'+figNum.replace(/\./g,'-')+'-'+
+            String(now2.getDate()).padStart(2,'0')+'-'+
+            String(now2.getMonth()+1).padStart(2,'0')+'-'+
+            now2.getFullYear()+'.pdf';
+          const a=document.createElement('a'); a.href=url; a.download=fn;
+          document.body.appendChild(a); a.click(); document.body.removeChild(a);
+          setTimeout(function(){URL.revokeObjectURL(url);},2000);
+          toast('PDF exported ✓','success');
+        });
+      });
+    }).catch(function(err){
+      console.error('PDF build error:', err);
+      toast('PDF export failed: '+err.message,'error');
+    });
+  }
+
+  // ── Run canvas pipeline then build PDF ──────────────────────────────────────
+  drawAllTiles(function() {
+    drawVectors(function() {
+      drawMarkers(function() {
+        ctx.restore();
+
+        // Use toBlob (same as working PNG export). Then read bytes via
+        // arrayBuffer() — avoids atob() on huge base64 strings which can fail.
+        function captureAndBuild(canvas) {
+          try {
+            canvas.toBlob(function(blob) {
+              if (!blob) {
+                toast('Canvas capture returned null blob', 'error');
+                return;
+              }
+              // Use arrayBuffer() if available (modern browsers), else FileReader
+              if (blob.arrayBuffer) {
+                blob.arrayBuffer().then(function(ab) {
+                  buildPDF(new Uint8Array(ab));
+                }).catch(function(err) {
+                  toast('Canvas read failed: ' + err.message, 'error');
+                });
+              } else {
+                var fr = new FileReader();
+                fr.onload = function() { buildPDF(new Uint8Array(fr.result)); };
+                fr.onerror = function() { toast('Canvas read failed', 'error'); };
+                fr.readAsArrayBuffer(blob);
+              }
+            }, 'image/png');
+          } catch(e) {
+            toast('Canvas capture error: ' + e.message, 'error');
+          }
+        }
+
+        // Try the main canvas first. If tainted, fall back to vectors-only canvas.
+        try {
+          offscreen.toDataURL('image/png'); // probe for taint (throws SecurityError)
+          captureAndBuild(offscreen);
+        } catch(e) {
+          // Canvas is tainted by cross-origin tiles — use a clean vectors-only canvas
+          var fallback = document.createElement('canvas');
+          fallback.width = CW; fallback.height = CH;
+          var fctx = fallback.getContext('2d');
+          fctx.fillStyle = isDark ? '#111920' : '#f0f2f4';
+          fctx.fillRect(0, 0, CW, CH);
+          var svgEl2 = mapEl.querySelector('.leaflet-overlay-pane svg');
+          if (svgEl2) {
+            var clone2 = svgEl2.cloneNode(true);
+            clone2.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+            clone2.setAttribute('width', CW); clone2.setAttribute('height', CH);
+            // Apply same vertical offset
+            var g2 = document.createElementNS('http://www.w3.org/2000/svg','g');
+            g2.setAttribute('transform','translate('+mapOffsetX+','+mapOffsetY+')');
+            while (clone2.firstChild) g2.appendChild(clone2.firstChild);
+            clone2.appendChild(g2);
+            clone2.style.transform = ''; clone2.removeAttribute('style');
+            var si2 = new Image();
+            var guard2 = setTimeout(function() {
+              si2.onload = si2.onerror = null;
+              captureAndBuild(fallback);
+            }, 3000);
+            si2.onload = function() {
+              clearTimeout(guard2);
+              try { fctx.drawImage(si2, 0, 0, CW, CH); } catch(e2) {}
+              captureAndBuild(fallback);
+            };
+            si2.onerror = function() { clearTimeout(guard2); captureAndBuild(fallback); };
+            si2.src = 'data:image/svg+xml;charset=utf-8,' +
+              encodeURIComponent(new XMLSerializer().serializeToString(clone2));
+          } else {
+            captureAndBuild(fallback);
+          }
+        }
+      });
+    });
+  });
 }
 
 // ══════════════════════════════════════════════════

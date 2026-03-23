@@ -14,6 +14,10 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <link rel="stylesheet" href="css/gaia.css"/>
+<!-- pdf-lib for PDF template export -->
+<script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<!-- Umwelt 2024 logo (transparent, landscape) -->
+<script src="js/umwelt-logo.js"></script>
 <!-- Gaia config — fill in your AGOL Client ID here -->
 <script src="gaia-config.js"></script>
 </head>
@@ -239,6 +243,28 @@
   <!-- MAP COLUMN -->
   <div id="map-column">
     <div id="map-container">
+      <!-- LOCATION SEARCH BAR -->
+      <div id="location-search-bar" style="position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:1000;display:flex;align-items:center;gap:0;width:340px;max-width:calc(100vw - 200px);filter:drop-shadow(0 2px 8px rgba(0,0,0,0.35));">
+        <input type="text" id="location-search-input" placeholder="🔍  Search location or address…"
+          style="flex:1;padding:7px 12px;font-family:var(--mono);font-size:11px;
+                 border:1.5px solid rgba(255,255,255,0.6);border-right:none;border-radius:6px 0 0 6px;
+                 background:rgba(255,255,255,0.82);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+                 color:#1a2b3c;outline:none;"
+          onkeydown="if(event.key==='Enter'){searchLocation();}"
+          oninput="clearLocationResults()"/>
+        <button onclick="searchLocation()"
+          style="padding:7px 11px;font-size:12px;
+                 background:rgba(0,116,168,0.92);color:#fff;
+                 border:1.5px solid rgba(0,116,168,0.92);border-radius:0 6px 6px 0;
+                 cursor:pointer;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);">→</button>
+      </div>
+      <!-- SEARCH RESULTS DROPDOWN -->
+      <div id="location-search-results" style="position:absolute;top:44px;left:50%;transform:translateX(-50%);z-index:1001;
+           width:340px;max-width:calc(100vw - 200px);
+           background:rgba(255,255,255,0.93);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+           border:1px solid rgba(255,255,255,0.6);
+           border-radius:0 0 6px 6px;box-shadow:0 4px 12px rgba(0,0,0,0.25);display:none;max-height:220px;overflow-y:auto;">
+      </div>
       <div id="map">
       <!-- GUIDED EMPTY STATE — hidden once first layer loads -->
       <div id="map-empty-state">
@@ -305,11 +331,11 @@
   <div id="right-panel">
     <!-- Panel Action Buttons -->
     <div class="panel-section" style="padding:10px 12px;display:flex;flex-direction:column;gap:6px;">
-      <button class="btn btn-ghost btn-full" onclick="toggleExportPanel()" id="export-open-btn" style="font-size:10px;">
-        ↓ Export
-      </button>
       <button class="btn btn-ghost btn-full" onclick="exportMapPNG()" style="font-size:10px;" title="Export current map view as PNG">
         🖼 Export Map PNG
+      </button>
+      <button class="btn btn-ghost btn-full" onclick="exportMapPDFTemplate()" style="font-size:10px;" title="Export map into Umwelt PDF template">
+        📄 Export PDF Template
       </button>
       <button class="btn btn-ghost btn-full" onclick="toggleCreatePanel()" id="create-open-btn" style="font-size:10px;">
         ✚ Create Features
@@ -537,7 +563,7 @@
 </div>
 
 <!-- COLOUR PICKER POPUP -->
-<div id="color-picker-popup" style="display:none;position:fixed;z-index:9900;background:#fff;border:1px solid var(--border);border-radius:7px;box-shadow:0 4px 18px rgba(0,0,0,0.18);padding:8px;width:188px;">
+<div id="color-picker-popup" style="display:none;position:fixed;z-index:9900;background:#fff;border:1px solid var(--border);border-radius:7px;box-shadow:0 4px 18px rgba(0,0,0,0.18);padding:8px;width:200px;">
   <div style="font-family:var(--mono);font-size:8px;font-weight:700;color:#2c3e50;letter-spacing:1px;text-transform:uppercase;margin-bottom:7px;padding-bottom:5px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
     <span>Symbology</span>
     <span style="cursor:pointer;opacity:0.5;font-size:11px;" onclick="closeColorPicker()" title="Close">✕</span>
@@ -556,6 +582,17 @@
     </div>
   </div>
 
+  <!-- Point size (only shown for point layers) -->
+  <div id="point-size-row" style="display:none;margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--border);">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+      <div style="font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;">Point Size</div>
+      <span id="point-size-label" style="font-family:var(--mono);font-size:9px;color:var(--sky);font-weight:600;">14px</span>
+    </div>
+    <input type="range" id="point-size-slider" min="4" max="40" step="1" value="14"
+      style="width:100%;cursor:pointer;"
+      oninput="document.getElementById('point-size-label').textContent=this.value+'px'; applyPointSize(parseInt(this.value))"/>
+  </div>
+
   <!-- Fill -->
   <div style="margin-bottom:6px;">
     <div style="font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.5px;">Fill</div>
@@ -566,18 +603,28 @@
     </div>
   </div>
 
-  <!-- Outline -->
+  <!-- Outline colour -->
   <div style="margin-bottom:6px;padding-top:6px;border-top:1px solid var(--border);">
     <div style="font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.5px;">Outline</div>
     <div id="outline-color-swatches" style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:3px;"></div>
     <input type="color" id="outline-color-custom" style="width:100%;height:20px;border:1px solid var(--border);border-radius:3px;cursor:pointer;padding:1px;" onchange="applyOutlineColor(this.value)"/>
   </div>
 
+  <!-- Outline width -->
+  <div style="margin-bottom:6px;padding-top:6px;border-top:1px solid var(--border);">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+      <div style="font-family:var(--mono);font-size:8px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.5px;">Outline Width</div>
+      <span id="outline-width-label" style="font-family:var(--mono);font-size:9px;color:var(--sky);font-weight:600;">1.5px</span>
+    </div>
+    <input type="range" id="outline-width-slider" min="0" max="10" step="0.5" value="1.5"
+      style="width:100%;cursor:pointer;"
+      oninput="document.getElementById('outline-width-label').textContent=this.value+'px'; applyOutlineWidth(parseFloat(this.value))"/>
+  </div>
+
   <!-- Preview row — compact -->
   <div style="padding-top:6px;border-top:1px solid var(--border);display:flex;align-items:center;gap:6px;">
     <div id="color-preview-box" style="width:28px;height:20px;border-radius:3px;flex-shrink:0;border:2px solid #888;"></div>
     <div style="font-family:var(--mono);font-size:8px;color:var(--text3);flex:1;">Preview</div>
-
   </div>
 </div>
 
@@ -1000,9 +1047,16 @@
 <script src="js/gaia.js?v=4d047ac2"></script>
 <script src="js/agol.js?v=3ec5269a"></script>
 <!-- MAP RIGHT-CLICK CONTEXT MENU -->
-<div id="map-ctx-menu" style="display:none;position:fixed;z-index:9800;background:#ffffff;border:1px solid var(--border);border-radius:7px;box-shadow:0 6px 24px rgba(0,0,0,0.18);min-width:200px;overflow:hidden;animation:wfadeIn 0.12s ease;">
+<div id="map-ctx-menu" style="display:none;position:fixed;z-index:9800;background:#ffffff;border:1px solid var(--border);border-radius:7px;box-shadow:0 6px 24px rgba(0,0,0,0.18);min-width:260px;max-width:300px;overflow:hidden;animation:wfadeIn 0.12s ease;">
   <div style="padding:5px 10px;font-family:var(--mono);font-size:9px;color:var(--text3);letter-spacing:1px;border-bottom:1px solid var(--border);background:#d8dfe6;">📍 MAP COORDINATES</div>
-  <div id="map-ctx-coords-display" style="padding:6px 12px;font-family:var(--mono);font-size:10px;color:var(--sky);"></div>
+  <div id="map-ctx-coords-display" style="padding:5px 12px 3px;font-family:var(--mono);font-size:10px;color:var(--sky);"></div>
+  <div id="map-ctx-address-row" style="display:none;padding:2px 8px 7px 12px;display:none;align-items:flex-start;gap:5px;">
+    <div id="map-ctx-address-display" style="font-family:var(--mono);font-size:9px;color:var(--text3);word-wrap:break-word;white-space:normal;line-height:1.5;flex:1;"></div>
+    <button id="map-ctx-address-copy" onclick="copyCtxAddress()" title="Copy address"
+      style="flex-shrink:0;margin-top:1px;padding:2px 5px;font-size:10px;line-height:1;
+             background:var(--bg3);border:1px solid var(--border);border-radius:4px;
+             cursor:pointer;color:var(--text2);">📋</button>
+  </div>
   <div class="ctx-sep"></div>
   <div class="ctx-item" onclick="mapCtxCopyLatLng()"><span class="ctx-icon">📋</span> Copy Lat, Lng</div>
   <div class="ctx-item" onclick="mapCtxCopyLngLat()"><span class="ctx-icon">📋</span> Copy Lng, Lat (GeoJSON)</div>
