@@ -269,9 +269,11 @@ async function loadGAIASession(file) {
         if (l.tileUrl) {
           const tileLayer = L.tileLayer(l.tileUrl, { maxZoom: 22, attribution: '' });
           if (l.visible !== false) tileLayer.addTo(state.map);
+          const tileOpacity = (l.layerOpacity != null) ? l.layerOpacity : 1;
+          if (tileOpacity < 1) tileLayer.setOpacity(tileOpacity);
           state.layers.push({ name: l.name, color: l.color || '#3498db', visible: l.visible !== false,
             format: l.format || 'Tile', isTile: true, tileUrl: l.tileUrl, tileType: l.tileType,
-            leafletLayer: tileLayer, fields: {}, geomType: 'Tile' });
+            leafletLayer: tileLayer, fields: {}, geomType: 'Tile', layerOpacity: tileOpacity });
           loaded++;
         }
         continue;
@@ -297,6 +299,23 @@ async function loadGAIASession(file) {
           state.map.removeLayer(newLayer.leafletLayer);
         }
         _applySymbologyToLeaflet(newLayer);
+        // Restore opacity
+        if (l.layerOpacity != null) {
+          newLayer.layerOpacity = l.layerOpacity;
+          if (l.layerOpacity < 1) {
+            newLayer.leafletLayer.eachLayer(function(sub) {
+              if (sub.setOpacity) sub.setOpacity(l.layerOpacity);
+              if (sub.setStyle) sub.setStyle({ opacity: l.layerOpacity, fillOpacity: (newLayer.noFill ? 0 : 0.25) * l.layerOpacity });
+            });
+          }
+        }
+        // Restore labels
+        if (l.labelConfig && l.labelConfig.enabled && l.labelConfig.field) {
+          newLayer.labelConfig = l.labelConfig;
+          setTimeout(() => _renderLabelLayer(state.layers.indexOf(newLayer)), 100);
+        } else if (l.labelConfig) {
+          newLayer.labelConfig = l.labelConfig;
+        }
       }
       loaded++;
     }
@@ -601,7 +620,7 @@ function addLayer(geojson, name, sourceCRS, format) {
   leafletLayer.addTo(state.map);
   // New layers go to top of list (index 0) — refresh z-order
   setTimeout(refreshLayerZOrder, 50);
-  state.layers.push({ geojson, name, sourceCRS, format, color, fields, geomType, leafletLayer, visible:true });
+  state.layers.push({ geojson, name, sourceCRS, format, color, fields, geomType, leafletLayer, visible:true, layerOpacity:1 });
   updateLayerList(); updateExportLayerList(); updateSBLLayerList(); setActiveLayer(idx);
   _updateEmptyState();
   try { state.map.fitBounds(leafletLayer.getBounds(), {padding:[30,30]}); } catch(e){}
@@ -693,13 +712,29 @@ function updateLayerList() {
          ondragend="handleLayerDragEnd(event)">
       <div class="layer-drag-handle" title="Drag to reorder">⠿</div>
       <div class="layer-geom-icon" onclick="event.stopPropagation();openColorPickerForLayer(${i})" title="Click to change colour" style="cursor:pointer;">${layerGeomIcon(layer)}</div>
-      <div class="layer-info">
-        <div class="layer-name">${layer.name}</div>
-        <div class="layer-meta">${layer.format}${layer.isTile ? ' · Tile Overlay' : ' · ' + (layer.geojson.features||[]).length + ' feat'}</div>
-      </div>
-      <div class="layer-actions">
-        <button class="btn btn-ghost btn-sm" style="padding:2px 5px;font-size:11px;" onclick="event.stopPropagation();toggleLayerVisibility(${i})" title="${layer.visible?'Hide layer':'Show layer'}">${layer.visible?'👁':'🚫'}</button>
-        <button class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:13px;letter-spacing:1px;" onclick="event.stopPropagation();openLayerCtxMenu(event,${i})" title="Options">⋯</button>
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:0;">
+        <div style="display:flex;align-items:center;min-width:0;">
+          <div class="layer-info" style="flex:1;min-width:0;">
+            <div class="layer-name">${layer.name}</div>
+            <div class="layer-meta">${layer.format}${layer.isTile ? ' · Tile Overlay' : ' · ' + (layer.geojson.features||[]).length + ' feat'}</div>
+          </div>
+          <div class="layer-actions">
+            <button class="btn btn-ghost btn-sm" style="padding:2px 5px;font-size:11px;" onclick="event.stopPropagation();toggleLayerVisibility(${i})" title="${layer.visible?'Hide layer':'Show layer'}">${layer.visible?'👁':'🚫'}</button>
+            <button class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:13px;letter-spacing:1px;" onclick="event.stopPropagation();openLayerCtxMenu(event,${i})" title="Options">⋯</button>
+          </div>
+        </div>
+        <div class="layer-opacity-row" onclick="event.stopPropagation()" ondragstart="event.stopPropagation();event.preventDefault();" draggable="false"
+             style="display:flex;align-items:center;gap:5px;padding:2px 0 1px 0;margin-top:3px;">
+          <span style="font-size:8px;color:var(--text3);font-family:var(--mono);flex-shrink:0;opacity:0.7;">opacity</span>
+          <input type="range" min="0" max="100" value="${Math.round((layer.layerOpacity??1)*100)}"
+                 style="flex:1;height:2px;cursor:pointer;accent-color:#14b1e7;margin:0;padding:0;"
+                 title="Layer opacity"
+                 onclick="event.stopPropagation()"
+                 onmousedown="event.stopPropagation()"
+                 ontouchstart="event.stopPropagation()"
+                 oninput="event.stopPropagation();setLayerOpacity(${i},this.value/100)"/>
+          <span class="layer-opacity-pct" style="font-size:8px;color:var(--text3);font-family:var(--mono);width:24px;text-align:right;flex-shrink:0;opacity:0.7;">${Math.round((layer.layerOpacity??1)*100)}%</span>
+        </div>
       </div>
     </div>`).join('');
 }
@@ -763,6 +798,30 @@ function handleLayerDragEnd(e) {
   e.currentTarget.style.opacity = '';
   document.querySelectorAll('.layer-item').forEach(el => el.classList.remove('drag-over-top','drag-over-bottom'));
   _layerDragSrc = -1;
+}
+
+// Set opacity for a specific layer index (0..1)
+function setLayerOpacity(idx, val) {
+  const layer = state.layers[idx];
+  if (!layer) return;
+  layer.layerOpacity = Math.max(0, Math.min(1, parseFloat(val)));
+  if (layer.leafletLayer) {
+    if (layer.isTile) {
+      layer.leafletLayer.setOpacity(layer.layerOpacity);
+    } else {
+      layer.leafletLayer.eachLayer(function(sub) {
+        if (sub.setOpacity) sub.setOpacity(layer.layerOpacity);
+        if (sub.setStyle) sub.setStyle({ opacity: layer.layerOpacity, fillOpacity: (layer.noFill ? 0 : 0.25) * layer.layerOpacity });
+      });
+    }
+  }
+  // Update only the percentage label without full re-render
+  const items = document.querySelectorAll('.layer-item');
+  if (items[idx]) {
+    const span = items[idx].querySelector('.layer-opacity-pct');
+    if (span) span.textContent = Math.round(layer.layerOpacity * 100) + '%';
+  }
+  saveSession();
 }
 
 function toggleLayerVisibility(i) {
@@ -2405,6 +2464,171 @@ function ctxExportData() {
   if (sel) { sel.value = String(ctxLayerIdx); }
 }
 
+
+// ── LABELLING ─────────────────────────────────────────────────────────
+
+function ctxOpenLabelling(e) {
+  closeLayerCtxMenu();
+  const layer = state.layers[ctxLayerIdx];
+  if (!layer || layer.isTile) { toast('Labelling is not available for tile layers', 'error'); return; }
+
+  // Populate field dropdown
+  const sel = document.getElementById('label-field-select');
+  sel.innerHTML = '<option value="">— select field —</option>';
+  const fields = Object.keys(layer.fields || {});
+  fields.forEach(f => {
+    const opt = document.createElement('option');
+    opt.value = f; opt.textContent = f;
+    sel.appendChild(opt);
+  });
+
+  // Restore existing settings if any
+  const cfg = layer.labelConfig || {};
+  sel.value = cfg.field || '';
+  const slider = document.getElementById('label-fontsize-slider');
+  const sizeDisplay = document.getElementById('label-fontsize-display');
+  const fs = cfg.fontSize || 9;
+  slider.value = fs;
+  sizeDisplay.textContent = fs + 'px';
+
+  const toggle = document.getElementById('label-enabled-toggle');
+  toggle.checked = !!(cfg.enabled);
+  updateLabelToggleText(toggle.checked);
+
+  // Store which layer we are editing
+  const popup = document.getElementById('labelling-popup');
+  popup.dataset.layerIdx = ctxLayerIdx;
+
+  // Position near the ⋯ button of the active layer item
+  const items = document.querySelectorAll('.layer-item');
+  const anchor = items[ctxLayerIdx] ? items[ctxLayerIdx].getBoundingClientRect() : null;
+  const pw = 200, ph = 220;
+  let px = anchor ? anchor.right + 6 : window.innerWidth / 2 - pw / 2;
+  let py = anchor ? anchor.top : window.innerHeight / 2 - ph / 2;
+  if (px + pw > window.innerWidth - 8) px = (anchor ? anchor.left : window.innerWidth) - pw - 6;
+  if (py + ph > window.innerHeight - 8) py = window.innerHeight - ph - 8;
+  popup.style.left = px + 'px';
+  popup.style.top  = py + 'px';
+  popup.style.display = 'block';
+
+  setTimeout(() => document.addEventListener('click', _closeLabellingOnOutside, { once: true }), 10);
+}
+
+function _closeLabellingOnOutside(e) {
+  const popup = document.getElementById('labelling-popup');
+  if (popup && !popup.contains(e.target)) { popup.style.display = 'none'; }
+  else if (popup && popup.style.display !== 'none') {
+    setTimeout(() => document.addEventListener('click', _closeLabellingOnOutside, { once: true }), 10);
+  }
+}
+
+function closeLabellingModal() {
+  document.getElementById('labelling-popup').style.display = 'none';
+}
+
+function updateLabelToggleText(checked) {
+  const text = document.getElementById('label-toggle-text');
+  if (text) text.textContent = checked ? 'On' : 'Off';
+}
+
+function applyLabelling() {
+  const backdrop = document.getElementById('labelling-popup');
+  const idx = parseInt(backdrop.dataset.layerIdx);
+  const layer = state.layers[idx];
+  if (!layer) { closeLabellingModal(); return; }
+
+  const field    = document.getElementById('label-field-select').value;
+  const fontSize = parseInt(document.getElementById('label-fontsize-slider').value) || 9;
+  const enabled  = document.getElementById('label-enabled-toggle').checked;
+
+  layer.labelConfig = { field, fontSize, enabled };
+
+  // Remove old label layer if any
+  _removeLabelLayer(idx);
+
+  if (enabled && field) {
+    _renderLabelLayer(idx);
+  }
+
+  saveSession();
+  closeLabellingModal();
+  toast(enabled && field ? 'Labels applied to ' + layer.name : 'Labels removed from ' + layer.name, 'success');
+}
+
+function _removeLabelLayer(idx) {
+  const layer = state.layers[idx];
+  if (!layer) return;
+  if (layer._labelLayer) {
+    state.map.removeLayer(layer._labelLayer);
+    layer._labelLayer = null;
+  }
+}
+
+function _renderLabelLayer(idx) {
+  const layer = state.layers[idx];
+  if (!layer || !layer.labelConfig || !layer.labelConfig.enabled || !layer.labelConfig.field) return;
+  const cfg = layer.labelConfig;
+
+  const markers = [];
+  (layer.geojson.features || []).forEach(function(feat) {
+    if (!feat.geometry) return;
+    const val = feat.properties ? feat.properties[cfg.field] : undefined;
+    if (val === undefined || val === null || val === '') return;
+
+    let latlng = null;
+    const type = feat.geometry.type;
+    if (type === 'Point') {
+      latlng = L.latLng(feat.geometry.coordinates[1], feat.geometry.coordinates[0]);
+    } else if (type === 'MultiPoint') {
+      const c = feat.geometry.coordinates[0];
+      if (c) latlng = L.latLng(c[1], c[0]);
+    } else if (type === 'Polygon' || type === 'MultiPolygon') {
+      try { latlng = L.geoJSON(feat).getBounds().getCenter(); } catch(e) {}
+    } else if (type === 'LineString') {
+      const coords = feat.geometry.coordinates;
+      const mid = coords[Math.floor(coords.length / 2)];
+      if (mid) latlng = L.latLng(mid[1], mid[0]);
+    } else if (type === 'MultiLineString') {
+      const coords = feat.geometry.coordinates[0];
+      if (coords) {
+        const mid = coords[Math.floor(coords.length / 2)];
+        if (mid) latlng = L.latLng(mid[1], mid[0]);
+      }
+    }
+    if (!latlng) return;
+
+    const icon = L.divIcon({
+      className: '',
+      html: '<span style="font-family:Arial,sans-serif;font-size:' + cfg.fontSize + 'px;' +
+            'color:#222;text-shadow:1px 1px 0 #fff,-1px -1px 0 #fff,1px -1px 0 #fff,-1px 1px 0 #fff;' +
+            'white-space:nowrap;pointer-events:none;user-select:none;">' +
+            String(val).replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</span>',
+      iconAnchor: [0, 0],
+      iconSize: null
+    });
+    markers.push(L.marker(latlng, { icon, interactive: false, keyboard: false }));
+  });
+
+  if (markers.length === 0) return;
+  layer._labelLayer = L.layerGroup(markers).addTo(state.map);
+}
+
+// Re-render labels when layer visibility is toggled
+const _origToggleLayerVisibility = toggleLayerVisibility;
+toggleLayerVisibility = function(i) {
+  _origToggleLayerVisibility(i);
+  const layer = state.layers[i];
+  if (!layer) return;
+  if (layer.labelConfig && layer.labelConfig.enabled && layer.labelConfig.field) {
+    if (layer.visible) {
+      if (!layer._labelLayer) _renderLabelLayer(i);
+      else state.map.addLayer(layer._labelLayer);
+    } else {
+      if (layer._labelLayer) state.map.removeLayer(layer._labelLayer);
+    }
+  }
+};
+
 function clearSelection() {
   if (state.selectedFeatureIndices.size === 0) return;
   const n = state.selectedFeatureIndices.size;
@@ -3240,6 +3464,7 @@ function saveSession() {
             format: layer.format || 'Tile',
             tileUrl: layer.tileUrl || null,
             tileType: layer.tileType || null,
+            layerOpacity: layer.layerOpacity != null ? layer.layerOpacity : 1,
           };
         }
         // Vector layers: save GeoJSON + metadata
@@ -3255,6 +3480,8 @@ function saveSession() {
           editGeomType: layer.editGeomType || null,
           fields: layer.fields,
           geojson: layer.geojson,
+          layerOpacity: layer.layerOpacity != null ? layer.layerOpacity : 1,
+          labelConfig: layer.labelConfig || null,
         };
       }),
     };
@@ -3305,14 +3532,17 @@ function doExportSession() {
       layers: state.layers.map(layer => {
         if (layer.isTile) {
           return { isTile: true, name: layer.name, color: layer.color, visible: layer.visible,
-                   format: layer.format || 'Tile', tileUrl: layer.tileUrl || null, tileType: layer.tileType || null };
+                   format: layer.format || 'Tile', tileUrl: layer.tileUrl || null, tileType: layer.tileType || null,
+                   layerOpacity: layer.layerOpacity != null ? layer.layerOpacity : 1 };
         }
         return { isTile: false, name: layer.name, color: layer.color, fillColor: layer.fillColor || null,
                  outlineColor: layer.outlineColor || null, noFill: layer.noFill || false,
                  pointShape: layer.pointShape || 'circle',
                  visible: layer.visible, format: layer.format, sourceCRS: layer.sourceCRS,
                  geomType: layer.geomType, editable: layer.editable || false,
-                 editGeomType: layer.editGeomType || null, fields: layer.fields, geojson: layer.geojson };
+                 editGeomType: layer.editGeomType || null, fields: layer.fields, geojson: layer.geojson,
+                 layerOpacity: layer.layerOpacity != null ? layer.layerOpacity : 1,
+                 labelConfig: layer.labelConfig || null };
       }),
     };
     const json = JSON.stringify(sessionData);
@@ -3323,7 +3553,15 @@ function doExportSession() {
     a.download = 'gaia-session-' + new Date().toISOString().slice(0,10) + '.gaia';
     a.click();
     URL.revokeObjectURL(url);
-    toast('Session exported as .gaia file', 'success');
+    toast('Session exported as .gaia file — drag it onto a new session to restore', 'success');
+    // Flash the Save button
+    const exportBtn = document.getElementById('export-session-btn');
+    if (exportBtn) {
+      const orig = exportBtn.textContent;
+      exportBtn.textContent = '✓ Saved';
+      exportBtn.style.color = '#39d353';
+      setTimeout(() => { exportBtn.textContent = '💾 Export Session'; exportBtn.style.color = '#7ee8a2'; }, 2200);
+    }
   } catch(err) {
     toast('Export failed: ' + err.message, 'error');
   }
@@ -3358,7 +3596,9 @@ function loadSession() {
           try { leafletLayer = L.tileLayer(saved.tileUrl).addTo(state.map); } catch(e) { return; }
         }
         if (!saved.visible) state.map.removeLayer(leafletLayer);
-        state.layers.push({ isTile:true, name:saved.name, color:saved.color, visible:saved.visible, format:saved.format||'Tile', tileUrl:saved.tileUrl, tileType:saved.tileType, leafletLayer });
+        const savedTileOp = (saved.layerOpacity != null) ? saved.layerOpacity : 1;
+        if (savedTileOp < 1) leafletLayer.setOpacity(savedTileOp);
+        state.layers.push({ isTile:true, name:saved.name, color:saved.color, visible:saved.visible, format:saved.format||'Tile', tileUrl:saved.tileUrl, tileType:saved.tileType, leafletLayer, layerOpacity:savedTileOp });
       } else {
         // Vector layer
         const geojson = saved.geojson;
@@ -3410,12 +3650,25 @@ function loadSession() {
 
         if (!saved.visible) state.map.removeLayer(leafletLayer);
 
+        const savedVecOp = (saved.layerOpacity != null) ? saved.layerOpacity : 1;
+        if (savedVecOp < 1) {
+          leafletLayer.eachLayer(function(sub) {
+            if (sub.setOpacity) sub.setOpacity(savedVecOp);
+            if (sub.setStyle) sub.setStyle({ opacity: savedVecOp, fillOpacity: 0.15 * savedVecOp });
+          });
+        }
         state.layers.push({
           isTile: false, name: saved.name, color, visible: saved.visible,
           format: saved.format, sourceCRS: saved.sourceCRS, geomType: saved.geomType,
           editable, editGeomType: saved.editGeomType,
-          fields: saved.fields, geojson, leafletLayer,
+          fields: saved.fields, geojson, leafletLayer, layerOpacity: savedVecOp,
+          labelConfig: saved.labelConfig || null,
         });
+        // Restore labels
+        if (saved.labelConfig && saved.labelConfig.enabled && saved.labelConfig.field) {
+          const _li = state.layers.length - 1;
+          setTimeout(() => _renderLabelLayer(_li), 100);
+        }
         if (editable) createState.editLayerIndices.add(state.layers.length-1);
       }
     });
@@ -3440,7 +3693,10 @@ function loadSession() {
 function clearSession() {
   localStorage.removeItem(SESSION_KEY);
   // Also remove all layers from the map and reset state
-  state.layers.forEach(l => { if (l.leafletLayer) state.map.removeLayer(l.leafletLayer); });
+  state.layers.forEach((l, i) => {
+    if (l._labelLayer) { state.map.removeLayer(l._labelLayer); l._labelLayer = null; }
+    if (l.leafletLayer) state.map.removeLayer(l.leafletLayer);
+  });
   state.layers = [];
   state.activeLayerIndex = -1;
   state.selectedFeatureIndices = new Set();
@@ -3454,6 +3710,8 @@ function clearSession() {
   document.getElementById('table-count').textContent = '';
   showFeatureInspector(null);
   _updateEmptyState();
+  updateLegend();
+  updateCreateLayerList && updateCreateLayerList();
   toast('Session cleared — all layers removed', 'info');
 }
 
@@ -4838,7 +5096,54 @@ function _exportMapPNGWithTitle(userTitle) {
     }
   }
 
-  drawAllTiles(function() { drawVectors(function() { drawMarkers(finaliseAndSave); }); });
+
+  // ── Labels (divIcon text) ──────────────────────────────────────────────────
+  function drawLabels(cb) {
+    // Label markers live in .leaflet-marker-pane as .leaflet-marker-icon divs
+    // whose content is a <span> (not SVG). We render them directly with canvas text.
+    const labelEls = Array.from(
+      mapEl.querySelectorAll('.leaflet-marker-pane .leaflet-marker-icon span')
+    );
+    if (!labelEls.length) { cb(); return; }
+
+    ctx.save();
+    // Clip to map area so labels don't bleed into title/footer
+    ctx.rect(0, MAP_Y, W, H);
+    ctx.clip();
+
+    labelEls.forEach(function(span) {
+      const sr = span.getBoundingClientRect();
+      if (sr.width === 0 && sr.height === 0) return; // off-screen / hidden
+
+      const x = Math.round(sr.left - rect.left);
+      const y = Math.round(sr.top  - rect.top  + MAP_Y);
+
+      // Parse style from the span to get font-size and color
+      const style = span.getAttribute('style') || '';
+      const fsMatch = style.match(/font-size:\s*([\d.]+)px/);
+      const colMatch = style.match(/color:\s*([^;]+)/);
+      const fontSize = fsMatch ? parseFloat(fsMatch[1]) : 9;
+      const color    = colMatch ? colMatch[1].trim() : '#222';
+
+      ctx.font = fontSize + 'px Arial,sans-serif';
+      ctx.textBaseline = 'top';
+
+      // White halo (text-shadow equivalent)
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      for (var dx = -1; dx <= 1; dx++) {
+        for (var dy = -1; dy <= 1; dy++) {
+          if (dx !== 0 || dy !== 0) ctx.fillText(span.textContent, x + dx, y + dy);
+        }
+      }
+      // Actual text
+      ctx.fillStyle = color;
+      ctx.fillText(span.textContent, x, y);
+    });
+
+    ctx.restore();
+    cb();
+  }
+  drawAllTiles(function() { drawVectors(function() { drawMarkers(function() { drawLabels(finaliseAndSave); }); }); });
 }
 
 // ══════════════════════════════════════════════════
@@ -5224,7 +5529,54 @@ function _exportMapPNGWithTitle(userTitle) {
     }
   }
 
-  drawAllTiles(function() { drawVectors(function() { drawMarkers(finaliseAndSave); }); });
+
+  // ── Labels (divIcon text) ──────────────────────────────────────────────────
+  function drawLabels(cb) {
+    // Label markers live in .leaflet-marker-pane as .leaflet-marker-icon divs
+    // whose content is a <span> (not SVG). We render them directly with canvas text.
+    const labelEls = Array.from(
+      mapEl.querySelectorAll('.leaflet-marker-pane .leaflet-marker-icon span')
+    );
+    if (!labelEls.length) { cb(); return; }
+
+    ctx.save();
+    // Clip to map area so labels don't bleed into title/footer
+    ctx.rect(0, MAP_Y, W, H);
+    ctx.clip();
+
+    labelEls.forEach(function(span) {
+      const sr = span.getBoundingClientRect();
+      if (sr.width === 0 && sr.height === 0) return; // off-screen / hidden
+
+      const x = Math.round(sr.left - rect.left);
+      const y = Math.round(sr.top  - rect.top  + MAP_Y);
+
+      // Parse style from the span to get font-size and color
+      const style = span.getAttribute('style') || '';
+      const fsMatch = style.match(/font-size:\s*([\d.]+)px/);
+      const colMatch = style.match(/color:\s*([^;]+)/);
+      const fontSize = fsMatch ? parseFloat(fsMatch[1]) : 9;
+      const color    = colMatch ? colMatch[1].trim() : '#222';
+
+      ctx.font = fontSize + 'px Arial,sans-serif';
+      ctx.textBaseline = 'top';
+
+      // White halo (text-shadow equivalent)
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      for (var dx = -1; dx <= 1; dx++) {
+        for (var dy = -1; dy <= 1; dy++) {
+          if (dx !== 0 || dy !== 0) ctx.fillText(span.textContent, x + dx, y + dy);
+        }
+      }
+      // Actual text
+      ctx.fillStyle = color;
+      ctx.fillText(span.textContent, x, y);
+    });
+
+    ctx.restore();
+    cb();
+  }
+  drawAllTiles(function() { drawVectors(function() { drawMarkers(function() { drawLabels(finaliseAndSave); }); }); });
 }
 
 // ══════════════════════════════════════════════════
@@ -5750,9 +6102,46 @@ function _exportMapPDFWithTemplate(figNum, figTitle) {
   }
 
   // ── Run canvas pipeline then build PDF ──────────────────────────────────────
+
+  // ── Labels (divIcon text) ──────────────────────────────────────────────────
+  function drawLabels(cb) {
+    const labelEls = Array.from(
+      mapEl.querySelectorAll('.leaflet-marker-pane .leaflet-marker-icon span')
+    );
+    if (!labelEls.length) { cb(); return; }
+
+    ctx.save();
+    labelEls.forEach(function(span) {
+      const sr = span.getBoundingClientRect();
+      if (sr.width === 0 && sr.height === 0) return;
+
+      const x = Math.round(sr.left - rect.left) + mapOffsetX;
+      const y = Math.round(sr.top  - rect.top)  + mapOffsetY;
+
+      const style = span.getAttribute('style') || '';
+      const fsMatch = style.match(/font-size:\s*([\d.]+)px/);
+      const colMatch = style.match(/color:\s*([^;]+)/);
+      const fontSize = fsMatch ? parseFloat(fsMatch[1]) : 9;
+      const color    = colMatch ? colMatch[1].trim() : '#222';
+
+      ctx.font = fontSize + 'px Arial,sans-serif';
+      ctx.textBaseline = 'top';
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      for (var dx = -1; dx <= 1; dx++) {
+        for (var dy = -1; dy <= 1; dy++) {
+          if (dx !== 0 || dy !== 0) ctx.fillText(span.textContent, x + dx, y + dy);
+        }
+      }
+      ctx.fillStyle = color;
+      ctx.fillText(span.textContent, x, y);
+    });
+    ctx.restore();
+    cb();
+  }
   drawAllTiles(function() {
     drawVectors(function() {
       drawMarkers(function() {
+        drawLabels(function() {
         ctx.restore();
 
         // Use toBlob (same as working PNG export). Then read bytes via
@@ -5822,6 +6211,7 @@ function _exportMapPDFWithTemplate(figNum, figTitle) {
             captureAndBuild(fallback);
           }
         }
+        }); // drawLabels
       });
     });
   });
