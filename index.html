@@ -22,6 +22,359 @@
 <script src="gaia-config.js"></script>
 </head>
 <body>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     GAIA LOADING SCREEN
+     ═══════════════════════════════════════════════════════════════ -->
+<div id="gaia-loader">
+  <canvas id="loader-canvas"></canvas>
+
+  <div id="loader-content">
+    <!-- Animated globe icon -->
+    <div id="loader-globe">
+      <svg viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="globeGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#14b1e7;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#0C2E44;stop-opacity:1" />
+          </linearGradient>
+          <linearGradient id="shimmer" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" style="stop-color:#a1d1e6;stop-opacity:0" />
+            <stop offset="50%" style="stop-color:#ffffff;stop-opacity:0.3" />
+            <stop offset="100%" style="stop-color:#a1d1e6;stop-opacity:0" />
+          </linearGradient>
+          <clipPath id="globeClip">
+            <circle cx="60" cy="60" r="46" />
+          </clipPath>
+        </defs>
+        <!-- Globe body -->
+        <circle cx="60" cy="60" r="46" fill="url(#globeGrad)" opacity="0.95"/>
+        <!-- Latitude lines -->
+        <g clip-path="url(#globeClip)" stroke="#a1d1e6" stroke-width="0.8" fill="none" opacity="0.4">
+          <ellipse cx="60" cy="60" rx="46" ry="12"/>
+          <ellipse cx="60" cy="60" rx="46" ry="24"/>
+          <ellipse cx="60" cy="60" rx="46" ry="36"/>
+        </g>
+        <!-- Meridian lines -->
+        <g clip-path="url(#globeClip)" stroke="#a1d1e6" stroke-width="0.8" fill="none" opacity="0.4">
+          <line x1="60" y1="14" x2="60" y2="106"/>
+          <ellipse cx="60" cy="60" rx="20" ry="46"/>
+          <ellipse cx="60" cy="60" rx="36" ry="46"/>
+        </g>
+        <!-- Shimmer overlay -->
+        <rect x="14" y="14" width="92" height="92" fill="url(#shimmer)" clip-path="url(#globeClip)" opacity="0.6"/>
+        <!-- Globe ring -->
+        <circle cx="60" cy="60" r="46" stroke="#14b1e7" stroke-width="1.5" fill="none" opacity="0.7"/>
+        <!-- Outer glow ring -->
+        <circle cx="60" cy="60" r="54" stroke="#14b1e7" stroke-width="0.5" fill="none" opacity="0.2"/>
+        <!-- Pin marker -->
+        <g class="loader-pin">
+          <circle cx="60" cy="42" r="5" fill="#8ebe3f" opacity="0.9"/>
+          <path d="M60 47 L60 54" stroke="#8ebe3f" stroke-width="1.5" opacity="0.9"/>
+        </g>
+      </svg>
+    </div>
+
+    <!-- Brand -->
+    <div id="loader-brand">
+      <span id="loader-g">G</span><span id="loader-a1">a</span><span id="loader-i">i</span><span id="loader-a2">a</span>
+    </div>
+    <div id="loader-tagline">GIS Data Explorer</div>
+
+    <!-- Progress bar -->
+    <div id="loader-progress-wrap">
+      <div id="loader-progress-bar"></div>
+    </div>
+
+    <!-- Status text -->
+    <div id="loader-status">Initialising spatial engine…</div>
+  </div>
+
+  <!-- Particle dots rendered on canvas -->
+</div>
+
+<style>
+/* ── Loading screen ─────────────────────────────────────── */
+#gaia-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  background: #0C2E44;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  transition: opacity 0.7s ease, visibility 0.7s ease;
+}
+#gaia-loader.fade-out {
+  opacity: 0;
+  visibility: hidden;
+}
+
+#loader-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+#loader-content {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+/* Globe */
+#loader-globe {
+  width: 130px;
+  height: 130px;
+  animation: loaderGlobeSpin 6s linear infinite, loaderGlobeFloat 3s ease-in-out infinite;
+  filter: drop-shadow(0 0 24px rgba(20,177,231,0.55));
+}
+#loader-globe svg { width: 100%; height: 100%; }
+
+.loader-pin {
+  animation: loaderPinPulse 2s ease-in-out infinite;
+  transform-origin: 60px 47px;
+}
+
+@keyframes loaderGlobeSpin {
+  from { filter: drop-shadow(0 0 20px rgba(20,177,231,0.5)); }
+  50%  { filter: drop-shadow(0 0 36px rgba(20,177,231,0.85)); }
+  to   { filter: drop-shadow(0 0 20px rgba(20,177,231,0.5)); }
+}
+@keyframes loaderGlobeFloat {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-8px); }
+}
+@keyframes loaderPinPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%       { transform: scale(1.3); opacity: 0.6; }
+}
+
+/* Brand text */
+#loader-brand {
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  font-size: 52px;
+  font-weight: 700;
+  letter-spacing: 8px;
+  color: #e8f4fb;
+  display: flex;
+  gap: 0;
+}
+#loader-brand span {
+  display: inline-block;
+  animation: loaderLetterDrop 0.6s ease both;
+}
+#loader-g  { animation-delay: 0.0s; }
+#loader-a1 { animation-delay: 0.1s; }
+#loader-i  { animation-delay: 0.2s; }
+#loader-a2 { animation-delay: 0.3s; }
+
+@keyframes loaderLetterDrop {
+  from { opacity: 0; transform: translateY(-20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+#loader-tagline {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: #14b1e7;
+  opacity: 0;
+  animation: loaderFadeIn 0.5s ease 0.5s both;
+}
+
+@keyframes loaderFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Progress bar */
+#loader-progress-wrap {
+  width: 260px;
+  height: 3px;
+  background: rgba(161,209,230,0.15);
+  border-radius: 99px;
+  overflow: hidden;
+  opacity: 0;
+  animation: loaderFadeIn 0.4s ease 0.7s both;
+}
+#loader-progress-bar {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #14b1e7, #8ebe3f, #14b1e7);
+  background-size: 200% 100%;
+  border-radius: 99px;
+  transition: width 0.25s ease;
+  animation: loaderBarShimmer 1.5s linear infinite;
+}
+@keyframes loaderBarShimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Status text */
+#loader-status {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: rgba(161,209,230,0.6);
+  min-height: 14px;
+  opacity: 0;
+  animation: loaderFadeIn 0.4s ease 0.8s both;
+  transition: opacity 0.3s;
+}
+
+/* Coordinate grid lines in background */
+#gaia-loader::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(20,177,231,0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(20,177,231,0.05) 1px, transparent 1px);
+  background-size: 48px 48px;
+  animation: loaderGridPan 8s linear infinite;
+}
+@keyframes loaderGridPan {
+  from { background-position: 0 0; }
+  to   { background-position: 48px 48px; }
+}
+
+/* Radial vignette */
+#gaia-loader::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at center, transparent 35%, rgba(10,20,35,0.7) 100%);
+  pointer-events: none;
+}
+</style>
+
+<script>
+/* ── Loader Logic ──────────────────────────────────────────── */
+(function() {
+  const TOTAL_MS  = 5000;
+  const statuses  = [
+    'Initialising spatial engine…',
+    'Loading map libraries…',
+    'Preparing layer renderer…',
+    'Configuring coordinate systems…',
+    'Calibrating basemap tiles…',
+    'Almost ready…',
+  ];
+
+  let startTime = Date.now();
+  let statusIdx = 0;
+  let rafId;
+
+  const bar    = document.getElementById('loader-progress-bar');
+  const status = document.getElementById('loader-status');
+  const loader = document.getElementById('gaia-loader');
+
+  /* ── particle canvas ── */
+  const canvas = document.getElementById('loader-canvas');
+  const ctx    = canvas.getContext('2d');
+  let particles = [];
+
+  function resizeCanvas() {
+    canvas.width  = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+
+  /* seed particles */
+  for (let i = 0; i < 55; i++) {
+    particles.push({
+      x:  Math.random() * window.innerWidth,
+      y:  Math.random() * window.innerHeight,
+      r:  Math.random() * 1.6 + 0.4,
+      vx: (Math.random() - 0.5) * 0.35,
+      vy: (Math.random() - 0.5) * 0.35,
+      a:  Math.random() * 0.4 + 0.1,
+    });
+  }
+
+  function drawParticles() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    particles.forEach(p => {
+      p.x += p.vx;
+      p.y += p.vy;
+      if (p.x < 0) p.x = canvas.width;
+      if (p.x > canvas.width) p.x = 0;
+      if (p.y < 0) p.y = canvas.height;
+      if (p.y > canvas.height) p.y = 0;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = `rgba(20,177,231,${p.a})`;
+      ctx.fill();
+    });
+    /* draw faint connecting lines between nearby particles */
+    for (let i = 0; i < particles.length; i++) {
+      for (let j = i + 1; j < particles.length; j++) {
+        const dx = particles[i].x - particles[j].x;
+        const dy = particles[i].y - particles[j].y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 110) {
+          ctx.beginPath();
+          ctx.moveTo(particles[i].x, particles[i].y);
+          ctx.lineTo(particles[j].x, particles[j].y);
+          ctx.strokeStyle = `rgba(20,177,231,${0.07 * (1 - dist / 110)})`;
+          ctx.lineWidth = 0.5;
+          ctx.stroke();
+        }
+      }
+    }
+  }
+
+  function tick() {
+    const elapsed = Date.now() - startTime;
+    const pct = Math.min(elapsed / TOTAL_MS, 1);
+
+    /* progress bar */
+    bar.style.width = (pct * 100) + '%';
+
+    /* status messages */
+    const newIdx = Math.min(Math.floor(pct * statuses.length), statuses.length - 1);
+    if (newIdx !== statusIdx) {
+      statusIdx = newIdx;
+      status.style.opacity = '0';
+      setTimeout(() => {
+        status.textContent = statuses[statusIdx];
+        status.style.opacity = '1';
+      }, 200);
+    }
+
+    /* particles */
+    drawParticles();
+
+    if (pct < 1) {
+      rafId = requestAnimationFrame(tick);
+    } else {
+      /* done — fade out loader */
+      setTimeout(() => {
+        loader.classList.add('fade-out');
+        loader.addEventListener('transitionend', () => {
+          loader.style.display = 'none';
+        }, { once: true });
+        cancelAnimationFrame(rafId);
+      }, 300);
+    }
+  }
+
+  /* start after a tiny delay so fonts load */
+  setTimeout(() => requestAnimationFrame(tick), 80);
+})();
+</script>
+
 <div id="app">
 
 <!-- HEADER -->
