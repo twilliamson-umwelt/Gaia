@@ -6138,18 +6138,18 @@ function _exportMapPNGWithTitle(userTitle) {
 //                scale bar, Umwelt logo, disclaimer
 // ══════════════════════════════════════════════════
 function exportMapPDFTemplate() {
-  // ── Step 1: Ask for figure number and title ──────────────────────────────
+  // ── Step 1: Ask for figure number, title, image source, data source ─────
   const now0 = new Date();
-  const dd0  = String(now0.getDate()).padStart(2,'0');
-  const mm0  = String(now0.getMonth()+1).padStart(2,'0');
   const yyyy0 = now0.getFullYear();
-  const defaultTitle  = 'Figure Title';
-  const defaultFigNum = '1.1';
+  const defaultTitle     = 'Figure Title';
+  const defaultFigNum    = '1.1';
+  const defaultImgSrc    = 'ESRI Basemap (' + yyyy0 + ')';
+  const defaultDataSrc   = '';
 
   const overlay = document.createElement('div');
   overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:10700;display:flex;align-items:center;justify-content:center;';
   overlay.innerHTML = `
-    <div style="background:var(--bg2);border-radius:10px;width:400px;max-width:calc(100vw - 32px);
+    <div style="background:var(--bg2);border-radius:10px;width:420px;max-width:calc(100vw - 32px);
                 box-shadow:0 8px 40px rgba(0,0,0,0.4);overflow:hidden;">
       <div style="background:linear-gradient(135deg,#0C2E44,#113c64);border-bottom:2px solid #14b1e7;
                   padding:12px 16px;">
@@ -6158,25 +6158,47 @@ function exportMapPDFTemplate() {
         </div>
       </div>
       <div style="padding:16px;display:flex;flex-direction:column;gap:10px;">
-        <div>
-          <label style="font-family:var(--mono);font-size:9px;color:var(--text3);
-                        text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">
-            Figure Number (e.g. 1.1)
-          </label>
-          <input id="pdf-fignum-input" type="text" value="${defaultFigNum}"
-            style="width:100%;box-sizing:border-box;padding:7px 10px;font-family:var(--mono);
-                   font-size:11px;border:1px solid var(--border);border-radius:5px;
-                   background:var(--bg);color:var(--text);outline:none;"/>
+        <div style="display:flex;gap:10px;">
+          <div style="flex:0 0 90px;">
+            <label style="font-family:var(--mono);font-size:9px;color:var(--text3);
+                          text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">
+              Figure No.
+            </label>
+            <input id="pdf-fignum-input" type="text" value="${defaultFigNum}"
+              style="width:100%;box-sizing:border-box;padding:7px 10px;font-family:var(--mono);
+                     font-size:11px;border:1px solid var(--border);border-radius:5px;
+                     background:var(--bg);color:var(--text);outline:none;"/>
+          </div>
+          <div style="flex:1;">
+            <label style="font-family:var(--mono);font-size:9px;color:var(--text3);
+                          text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">
+              Figure Title
+            </label>
+            <input id="pdf-title-input" type="text" value="${defaultTitle}"
+              style="width:100%;box-sizing:border-box;padding:7px 10px;font-family:var(--mono);
+                     font-size:11px;border:1px solid var(--border);border-radius:5px;
+                     background:var(--bg);color:var(--text);outline:none;"/>
+          </div>
         </div>
         <div>
           <label style="font-family:var(--mono);font-size:9px;color:var(--text3);
                         text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">
-            Figure Title
+            Image Source (shown at bottom of map)
           </label>
-          <input id="pdf-title-input" type="text" value="${defaultTitle}"
+          <input id="pdf-imgsrc-input" type="text" value="${defaultImgSrc}"
             style="width:100%;box-sizing:border-box;padding:7px 10px;font-family:var(--mono);
                    font-size:11px;border:1px solid var(--border);border-radius:5px;
-                   background:var(--bg);color:var(--text);outline:none;"/>
+                   background:var(--bg);color:var(--text);outline:none;" placeholder="e.g. ESRI Basemap (2025)"/>
+        </div>
+        <div>
+          <label style="font-family:var(--mono);font-size:9px;color:var(--text3);
+                        text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:4px;">
+            Data Source
+          </label>
+          <input id="pdf-datasrc-input" type="text" value="${defaultDataSrc}"
+            style="width:100%;box-sizing:border-box;padding:7px 10px;font-family:var(--mono);
+                   font-size:11px;border:1px solid var(--border);border-radius:5px;
+                   background:var(--bg);color:var(--text);outline:none;" placeholder="e.g. NSW DFSI (2025)"/>
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px;">
           <button class="btn btn-ghost btn-sm" onclick="this.closest('div[style*=fixed]').remove()"
@@ -6184,10 +6206,12 @@ function exportMapPDFTemplate() {
           <button id="pdf-export-go" class="btn btn-primary btn-sm"
             style="font-size:10px;"
             onclick="
-              var figNum = document.getElementById('pdf-fignum-input').value.trim() || '${defaultFigNum}';
+              var figNum   = document.getElementById('pdf-fignum-input').value.trim() || '${defaultFigNum}';
               var figTitle = document.getElementById('pdf-title-input').value.trim() || '${defaultTitle}';
+              var imgSrc   = document.getElementById('pdf-imgsrc-input').value.trim();
+              var dataSrc  = document.getElementById('pdf-datasrc-input').value.trim();
               this.closest('div[style*=fixed]').remove();
-              _exportMapPDFWithTemplate(figNum, figTitle);
+              _exportMapPDFWithTemplate(figNum, figTitle, imgSrc, dataSrc);
             ">Export PDF</button>
         </div>
       </div>
@@ -6199,7 +6223,7 @@ function exportMapPDFTemplate() {
   }, 50);
 }
 
-function _exportMapPDFWithTemplate(figNum, figTitle) {
+function _exportMapPDFWithTemplate(figNum, figTitle, imgSrc, dataSrc) {
   if (typeof PDFLib === 'undefined') {
     toast('pdf-lib not loaded — check your internet connection', 'error');
     return;
@@ -6394,53 +6418,54 @@ function _exportMapPDFWithTemplate(figNum, figTitle) {
   function buildPDF(mapPngBytes) {
     const { PDFDocument, rgb, StandardFonts } = PDFLib;
 
-    // Page dimensions: A4 landscape
-    const PAGE_W = 841.89;
-    const PAGE_H = 595.28;
+    // ── Page dimensions: A4 landscape ─────────────────────────────────────────
+    const PAGE_W = 842;
+    const PAGE_H = 595;
 
-    // 0.5cm margin in pt (0.5cm = 0.5/2.54*72 = 14.17pt)
-    const MARGIN = 14.17;
-
-    // Map area: inset by margin on left, top, bottom; right edge is fixed
-    const MAP_X = MARGIN;
-    const MAP_Y = MARGIN;
-    const MAP_W = 676 - MARGIN;          // right edge still at 676pt
-    const MAP_H = PAGE_H - MARGIN * 2;   // inset top and bottom
+    // ── Template-matched coordinates (derived from SVG analysis) ──────────────
+    // Map frame exact coordinates from SVG (matrix net scale = 1pt)
+    const MAP_X  = 30.2;   // left edge
+    const MAP_Y  = 28.2;   // PDF bottom edge (lower y = near bottom of page)
+    const MAP_W  = 645.8;  // width to right edge at 676pt
+    const MAP_H  = 538.7;  // height
 
     // Right panel
     const PANEL_X = 676;
-    const PANEL_W = PAGE_W - PANEL_X;  // ~165.89 pt
+    const PANEL_W = PAGE_W - PANEL_X;  // 166pt
 
-    const DARK_BLUE = rgb(0.047, 0.118, 0.196);
-    const ACCENT    = rgb(0.078, 0.694, 0.906);
-    const TEXT_DARK = rgb(0.12,  0.18,  0.26);
-    const TEXT_MED  = rgb(0.38,  0.42,  0.47);
-    const WHITE     = rgb(1, 1, 1);
-    const BORDER    = rgb(0.82,  0.84,  0.86);
+    // Colour palette matching template (#4E4E4E dark text, #737373 grey)
+    const TEXT_DARK  = rgb(0.306, 0.306, 0.306);  // #4E4E4E
+    const TEXT_GREY  = rgb(0.451, 0.451, 0.451);  // #737373
+    const TEXT_MED   = rgb(0.4,   0.4,   0.4);
+    const WHITE      = rgb(1, 1, 1);
+    const BORDER     = rgb(0.71,  0.71,  0.71);   // #B5B5B5 approx
+    const BLACK_TEXT = rgb(0, 0, 0);
 
-    // ── Bottom-up layout constants ─────────────────────────────────────────────
-    // Work from the bottom of the page upward so nothing overlaps.
-    const DISC_FONT_SIZE = 4.5;
-    const DISC_LINE_H    = 6.5;
-    const DISC_BOTTOM    = 4;    // pt from bottom of page
-    // Disclaimer: ~8 lines max at PANEL_W-12 width
-    const DISC_LINES_MAX = 8;
-    const DISC_TOP       = DISC_BOTTOM + DISC_LINES_MAX * DISC_LINE_H; // ~56
-
-    const LOGO_H    = 22;
-    const LOGO_GAP  = 5;
-    const LOGO_Y    = DISC_TOP + LOGO_GAP;                   // ~61
-    const LOGO_TOP  = LOGO_Y + LOGO_H;                       // ~83
-
-    const DIVIDER2_Y = LOGO_TOP + 6;                         // ~89
-
-    // Scale bar block: divider → bar → labels → scale text → WGS84
-    // Total height: 4(bar) + 7(labels) + 7(km) + 7(scale) + 7(crs) = 32pt + 10 padding = 42
-    const SCALE_BLOCK_H  = 44;
-    const SCALE_TOP_Y    = DIVIDER2_Y + SCALE_BLOCK_H;       // ~133
-
-    // Legend clamps above SCALE_TOP_Y
-    const LEG_MAX_Y      = SCALE_TOP_Y;
+    // ── Fixed template positions (pt from PDF bottom) ─────────────────────────
+    // FIGURE X.X:   x=686, y=551 (near top of panel)
+    const FIG_NUM_X   = PANEL_X + 10;
+    const FIG_NUM_Y   = 551;
+    // Figure Title: y=533
+    const FIG_TITLE_X = PANEL_X + 10;
+    const FIG_TITLE_Y = 533;
+    // Legend label: y=493
+    const LEG_LABEL_X = PANEL_X + 10;
+    const LEG_LABEL_Y = 493;
+    // Inset/Legend box: x=686–821, y_bottom=428, y_top=344
+    const INSET_X     = PANEL_X + 10;
+    const INSET_W     = PANEL_W - 20;
+    const INSET_Y_BOT = 168;   // bottom of inset box
+    const INSET_Y_TOP = 252;   // top of inset box (taller = higher number in PDF)
+    // Scale bar area anchor: GDA2020 label at y≈114
+    const SCALE_AREA_Y = 155;  // base of scale block
+    // Logo: x≈701, y≈114 from bottom
+    const LOGO_Y     = 60;
+    const LOGO_H     = 30;
+    // North arrow: x≈657, y≈31 from bottom — INSIDE map area, bottom-left area
+    const NA_X       = 657;    // centre x
+    const NA_Y       = 31;     // centre y from PDF bottom
+    // Disclaimer at very bottom
+    const DISC_Y_BOT  = 4;
 
     PDFDocument.create().then(function(pdfDoc) {
       const page = pdfDoc.addPage([PAGE_W, PAGE_H]);
@@ -6464,7 +6489,7 @@ function _exportMapPDFWithTemplate(figNum, figTitle) {
         const mapImage  = results[2];
         const logoImage = results[3];
 
-        // Word-wrap helper (defined early, used throughout)
+        // Word-wrap helper
         function wrapText(text, font, size, maxW) {
           const words = text.split(' ');
           const lines = []; let line = '';
@@ -6482,152 +6507,213 @@ function _exportMapPDFWithTemplate(figNum, figTitle) {
         // ── 1. White page background ─────────────────────────────────────────
         page.drawRectangle({ x:0, y:0, width:PAGE_W, height:PAGE_H, color:WHITE });
 
-        // ── 2. Map image — stretch to fill the full frame ────────────────────
-        // Always fill the entire map frame. A map viewport doesn't need
-        // aspect-ratio preservation — stretching slightly to fill the box
-        // is far better than leaving empty bars at top and bottom.
+        // ── 2. Map image (fills the map frame) ──────────────────────────────
         page.drawImage(mapImage, {x:MAP_X, y:MAP_Y, width:MAP_W, height:MAP_H});
 
-        // ── 3. Map box border (4 lines, no fill) ────────────────────────────
-        page.drawLine({start:{x:MAP_X,        y:MAP_Y       }, end:{x:MAP_X+MAP_W, y:MAP_Y       }, thickness:0.5, color:rgb(0.25,0.25,0.25)});
-        page.drawLine({start:{x:MAP_X,        y:MAP_Y+MAP_H }, end:{x:MAP_X+MAP_W, y:MAP_Y+MAP_H }, thickness:0.5, color:rgb(0.25,0.25,0.25)});
-        page.drawLine({start:{x:MAP_X,        y:MAP_Y       }, end:{x:MAP_X,        y:MAP_Y+MAP_H }, thickness:0.5, color:rgb(0.25,0.25,0.25)});
-        page.drawLine({start:{x:MAP_X+MAP_W,  y:MAP_Y       }, end:{x:MAP_X+MAP_W,  y:MAP_Y+MAP_H }, thickness:0.5, color:rgb(0.25,0.25,0.25)});
+        // ── 3. Map frame border — all 4 sides of map bounding box ──────────
+        const brdC = rgb(0.306, 0.306, 0.306);
+        page.drawLine({start:{x:MAP_X,       y:MAP_Y},       end:{x:MAP_X+MAP_W, y:MAP_Y},       thickness:0.5, color:brdC}); // bottom
+        page.drawLine({start:{x:MAP_X,       y:MAP_Y+MAP_H}, end:{x:MAP_X+MAP_W, y:MAP_Y+MAP_H}, thickness:0.5, color:brdC}); // top
+        page.drawLine({start:{x:MAP_X,       y:MAP_Y},       end:{x:MAP_X,       y:MAP_Y+MAP_H}, thickness:0.5, color:brdC}); // left
+        page.drawLine({start:{x:MAP_X+MAP_W, y:MAP_Y},       end:{x:MAP_X+MAP_W, y:MAP_Y+MAP_H}, thickness:0.5, color:brdC}); // right
 
-        // ── 4. Right panel background ────────────────────────────────────────
+        // ── 4. Right panel (white background) ───────────────────────────────
         page.drawRectangle({x:PANEL_X, y:0, width:PANEL_W, height:PAGE_H, color:WHITE});
 
-        // ── 5. Header bar (dark blue) ────────────────────────────────────────
-        const HEADER_H = 52;
-        page.drawRectangle({x:PANEL_X, y:PAGE_H-HEADER_H, width:PANEL_W, height:HEADER_H, color:DARK_BLUE});
-        // Accent line at bottom of header
-        page.drawLine({start:{x:PANEL_X,y:PAGE_H-HEADER_H},end:{x:PAGE_W,y:PAGE_H-HEADER_H},
-          thickness:2, color:ACCENT});
-
-        // ── 6. Figure number ─────────────────────────────────────────────────
+        // ── 5. FIGURE X.X — grey bold large (matches template) ──────────────
         page.drawText('FIGURE ' + figNum, {
-          x:PANEL_X+8, y:PAGE_H-18, size:11, font:boldFont, color:WHITE
+          x:FIG_NUM_X, y:FIG_NUM_Y, size:13, font:boldFont, color:TEXT_GREY
         });
 
-        // ── 7. Figure title ──────────────────────────────────────────────────
-        const TITLE_Y_START = PAGE_H - HEADER_H - 16;
-        const titleLines = wrapText(figTitle, boldFont, 10, PANEL_W-16);
-        titleLines.forEach(function(tl,i){
-          page.drawText(tl, {x:PANEL_X+8, y:TITLE_Y_START-i*13, size:10, font:boldFont, color:DARK_BLUE});
+        // ── 6. Figure Title — black bold ─────────────────────────────────────
+        const titleLines = wrapText(figTitle, boldFont, 11, PANEL_W - 20);
+        titleLines.forEach(function(tl, i) {
+          page.drawText(tl, {x:FIG_TITLE_X, y:FIG_TITLE_Y - i*14, size:11, font:boldFont, color:BLACK_TEXT});
         });
 
-        // ── 8. Divider under title ───────────────────────────────────────────
-        const afterTitle = TITLE_Y_START - titleLines.length * 13 - 6;
-        page.drawLine({start:{x:PANEL_X+4,y:afterTitle},end:{x:PAGE_W-4,y:afterTitle},
-          thickness:0.5, color:BORDER});
+        // ── 7. Legend label — bold black ─────────────────────────────────────
+        page.drawText('Legend', {x:LEG_LABEL_X, y:LEG_LABEL_Y, size:8, font:boldFont, color:BLACK_TEXT});
 
-        // ── 9. Legend ────────────────────────────────────────────────────────
-        const LEG_LABEL_Y = afterTitle - 12;
-        page.drawText('Legend', {x:PANEL_X+8, y:LEG_LABEL_Y, size:8, font:boldFont, color:TEXT_DARK});
+        // ── 8. Inset box — Australia location map ────────────────────────────
+        // Compute where the map centre is in lat/lng using Leaflet map state
+        var mapCentreLat = 0, mapCentreLng = 133;
+        try {
+          if (window._gaiaMap && window._gaiaMap.getCenter) {
+            var c = window._gaiaMap.getCenter();
+            mapCentreLat = c.lat;
+            mapCentreLng = c.lng;
+          }
+        } catch(e) {}
 
+        // Draw the inset box border
+        const INSET_BOX_X = PANEL_X + 8;
+        const INSET_BOX_W = PANEL_W - 16;
+        const INSET_BOX_Y_BOT = 168;
+        const INSET_BOX_Y_TOP = 252;
+        const INSET_BOX_H = INSET_BOX_Y_TOP - INSET_BOX_Y_BOT;
+        page.drawRectangle({
+          x:INSET_BOX_X, y:INSET_BOX_Y_BOT, width:INSET_BOX_W, height:INSET_BOX_H,
+          color:rgb(0.94,0.96,0.99), borderColor:brdC, borderWidth:0.5
+        });
+
+        // Draw simplified Australia outline as SVG path inside the inset box
+        // Australia bounding box: lng 113–154, lat -44 to -10
+        // Inset box: x 684–834, y 168–252 (PDF coords)
+        var ausMinLng=113, ausMaxLng=154, ausMinLat=-44, ausMaxLat=-10;
+        var ibx=INSET_BOX_X+3, iby=INSET_BOX_Y_BOT+3, ibw=INSET_BOX_W-6, ibh=INSET_BOX_H-6;
+        function lngToX(lng){ return ibx + (lng-ausMinLng)/(ausMaxLng-ausMinLng)*ibw; }
+        function latToY(lat){ return iby + (lat-ausMinLat)/(ausMaxLat-ausMinLat)*ibh; }
+
+        // Simplified Australia coastal outline (coarse polygon, key points)
+        var ausPath = [
+          [114,-22],[114,-32],[116,-34],[119,-34],[122,-34],[124,-34],[126,-34],
+          [129,-35],[130,-35],[131,-33],[132,-32],[133,-32],[135,-35],[137,-36],
+          [139,-37],[141,-38],[143,-39],[145,-39],[147,-38],[149,-38],[150,-37],
+          [151,-34],[151,-30],[153,-28],[154,-25],[154,-18],[149,-14],[145,-15],
+          [144,-18],[141,-17],[139,-17],[136,-14],[136,-12],[131,-12],[130,-13],
+          [128,-15],[125,-14],[122,-18],[121,-21],[119,-22],[117,-21],[115,-22],[114,-22]
+        ].map(function(p){ return [lngToX(p[0]), latToY(p[1])]; });
+
+        // Draw Australia fill (light grey)
+        var ausD = 'M '+ausPath[0][0].toFixed(1)+' '+ausPath[0][1].toFixed(1);
+        for (var ai=1; ai<ausPath.length; ai++) {
+          ausD += ' L '+ausPath[ai][0].toFixed(1)+' '+ausPath[ai][1].toFixed(1);
+        }
+        ausD += ' Z';
+        page.drawSvgPath(ausD, {x:0, y:0, color:rgb(0.78,0.82,0.86), borderColor:brdC, borderWidth:0.4});
+
+        // Draw red dot for map location
+        var dotX = lngToX(mapCentreLng);
+        var dotY = latToY(mapCentreLat);
+        // clamp inside box
+        dotX = Math.max(ibx+2, Math.min(ibx+ibw-2, dotX));
+        dotY = Math.max(iby+2, Math.min(iby+ibh-2, dotY));
+        page.drawEllipse({x:dotX, y:dotY, xScale:3, yScale:3,
+          color:rgb(0.9,0.1,0.1), borderColor:rgb(0.7,0,0), borderWidth:0.5});
+
+        // ── 9. Legend entries — above inset box ──────────────────────────────
         const legendRows = getLegendRows();
-        const ROW_H=12, SW=9, GAP=5;
-        const LEG_START_Y = LEG_LABEL_Y - 10;
+        const ROW_H=11, SW=8, GAP=4;
+        const LEG_MIN_Y = INSET_BOX_Y_TOP + 4;  // must be above inset box
+        const LEG_START_Y = LEG_LABEL_Y - 14;
 
         legendRows.forEach(function(row, i) {
           const rowY = LEG_START_Y - i*ROW_H;
-          if (rowY < LEG_MAX_Y) return; // clamp above scale section
+          if (rowY < LEG_MIN_Y) return;
           if (row.isHeader) {
-            page.drawText(String(row.label).substring(0,22),
-              {x:PANEL_X+8, y:rowY, size:7, font:boldFont, color:ACCENT});
+            page.drawText(String(row.label).substring(0,24),
+              {x:PANEL_X+10, y:rowY, size:6.5, font:boldFont, color:TEXT_DARK});
             return;
           }
-          const sx=PANEL_X+8, cy=rowY+ROW_H/2-2;
+          const sx=PANEL_X+10, cy=rowY+4;
           if (row.isLine) {
             page.drawLine({start:{x:sx,y:cy},end:{x:sx+SW,y:cy},thickness:2,color:hexToRgb(row.color)});
           } else if (row.isPoint) {
             const fillC = row.noFill ? WHITE : hexToRgb(row.color);
             page.drawEllipse({x:sx+SW/2,y:cy,xScale:SW/2-0.5,yScale:SW/2-0.5,
-              color:fillC, borderColor:hexToRgb(row.outline||row.color), borderWidth:0.8});
+              color:fillC, borderColor:hexToRgb(row.outline||row.color), borderWidth:0.7});
           } else {
             const fillC = row.noFill ? WHITE : hexToRgb(row.color);
-            page.drawRectangle({x:sx,y:cy-SW/2+1,width:SW+1,height:SW-1,
-              color:fillC, borderColor:hexToRgb(row.outline||row.color), borderWidth:0.8});
+            page.drawRectangle({x:sx,y:cy-3,width:SW,height:SW-1,
+              color:fillC, borderColor:hexToRgb(row.outline||row.color), borderWidth:0.7});
           }
-          page.drawText(String(row.label).substring(0,21),
-            {x:sx+SW+GAP, y:rowY, size:7, font:regFont, color:TEXT_DARK});
+          page.drawText(String(row.label).substring(0,23),
+            {x:sx+SW+GAP, y:rowY, size:6.5, font:regFont, color:TEXT_DARK});
         });
 
-        // ── 10. Scale bar (anchored above logo) ──────────────────────────────
-        // Work bottom-up: divider at DIVIDER2_Y, scale content above it
-        page.drawLine({start:{x:PANEL_X+4,y:DIVIDER2_Y},end:{x:PAGE_W-4,y:DIVIDER2_Y},
-          thickness:0.5, color:BORDER});
-
+        // ── 10. Scale bar — below inset box ──────────────────────────────────
         const scaleInfo = getMapScaleInfo();
-        const BAR_X  = PANEL_X + 8;
-        const barPt  = Math.min(scaleInfo.barPt || 80, PANEL_W - 40);
+        const BAR_X  = PANEL_X + 10;
+        const barPt  = Math.min(scaleInfo.barPt || 80, PANEL_W - 45);
         const barKm  = scaleInfo.barKm || 100;
 
-        // CRS and scale ratio at bottom of scale block (just above divider)
-        const CRS_Y    = DIVIDER2_Y + 8;
-        const SCALE_Y  = CRS_Y + 8;
-        const KM_Y     = SCALE_Y + 8;
-        const LABEL_Y  = KM_Y + 8;    // tick labels under bar
-        const BAR_Y    = LABEL_Y + 8; // bar itself
+        // GDA2020 and scale labels first (above bar, below inset)
+        const GDA_Y    = INSET_BOX_Y_BOT - 8;
+        const SCALET_Y = GDA_Y - 8;
+        const KM_Y     = SCALET_Y - 8;
+        const LABY     = KM_Y - 8;
+        const BAR_Y    = LABY - 9;
 
-        page.drawText('WGS84',
-          {x:BAR_X, y:CRS_Y, size:6, font:regFont, color:TEXT_MED});
-        page.drawText(scaleInfo.scaleStr + ' at A4',
-          {x:BAR_X, y:SCALE_Y, size:6, font:regFont, color:TEXT_MED});
-        page.drawText('Kilometres',
-          {x:BAR_X, y:KM_Y, size:6, font:regFont, color:TEXT_MED});
+        page.drawText('GDA2020',                      {x:BAR_X, y:GDA_Y,    size:5.5, font:regFont, color:TEXT_MED});
+        page.drawText(scaleInfo.scaleStr + ' at A4',  {x:BAR_X, y:SCALET_Y, size:5.5, font:regFont, color:TEXT_MED});
+        page.drawText('Kilometres',                   {x:BAR_X, y:KM_Y,     size:5.5, font:regFont, color:TEXT_MED});
 
         // Tick labels
         const labelKm = barKm >= 1 ? barKm + ' km' : (barKm*1000).toFixed(0) + ' m';
-        page.drawText('0',      {x:BAR_X-1,       y:LABEL_Y, size:6, font:regFont, color:TEXT_DARK});
-        page.drawText(labelKm, {x:BAR_X+barPt-4, y:LABEL_Y, size:6, font:regFont, color:TEXT_DARK});
+        page.drawText('0',      {x:BAR_X-1,       y:LABY, size:5.5, font:regFont, color:TEXT_DARK});
+        page.drawText(labelKm, {x:BAR_X+barPt-4, y:LABY, size:5.5, font:regFont, color:TEXT_DARK});
 
         // Two-tone scale bar
         const SEG = barPt / 2;
         page.drawRectangle({x:BAR_X,     y:BAR_Y, width:SEG, height:4, color:rgb(0.2,0.2,0.2)});
         page.drawRectangle({x:BAR_X+SEG, y:BAR_Y, width:SEG, height:4, color:WHITE});
-        // Outline whole bar
-        page.drawLine({start:{x:BAR_X,y:BAR_Y},      end:{x:BAR_X+barPt,y:BAR_Y},      thickness:0.4,color:rgb(0.2,0.2,0.2)});
-        page.drawLine({start:{x:BAR_X,y:BAR_Y+4},    end:{x:BAR_X+barPt,y:BAR_Y+4},    thickness:0.4,color:rgb(0.2,0.2,0.2)});
-        page.drawLine({start:{x:BAR_X,y:BAR_Y},      end:{x:BAR_X,y:BAR_Y+4},          thickness:0.4,color:rgb(0.2,0.2,0.2)});
-        page.drawLine({start:{x:BAR_X+SEG,y:BAR_Y},  end:{x:BAR_X+SEG,y:BAR_Y+4},      thickness:0.4,color:rgb(0.2,0.2,0.2)});
-        page.drawLine({start:{x:BAR_X+barPt,y:BAR_Y},end:{x:BAR_X+barPt,y:BAR_Y+4},   thickness:0.4,color:rgb(0.2,0.2,0.2)});
+        page.drawLine({start:{x:BAR_X,y:BAR_Y},       end:{x:BAR_X+barPt,y:BAR_Y},       thickness:0.4,color:rgb(0.2,0.2,0.2)});
+        page.drawLine({start:{x:BAR_X,y:BAR_Y+4},     end:{x:BAR_X+barPt,y:BAR_Y+4},     thickness:0.4,color:rgb(0.2,0.2,0.2)});
+        page.drawLine({start:{x:BAR_X,y:BAR_Y},       end:{x:BAR_X,y:BAR_Y+4},            thickness:0.4,color:rgb(0.2,0.2,0.2)});
+        page.drawLine({start:{x:BAR_X+SEG,y:BAR_Y},   end:{x:BAR_X+SEG,y:BAR_Y+4},        thickness:0.4,color:rgb(0.2,0.2,0.2)});
+        page.drawLine({start:{x:BAR_X+barPt,y:BAR_Y}, end:{x:BAR_X+barPt,y:BAR_Y+4},     thickness:0.4,color:rgb(0.2,0.2,0.2)});
 
-        // ── 11. North arrow (right of scale bar) ─────────────────────────────
-        const NA_X = PANEL_X + PANEL_W - 16;
-        const NA_Y = DIVIDER2_Y + 28;
-        page.drawSvgPath('M 0 -9 L 4 4 L 0 2 L -4 4 Z',
-          {x:NA_X, y:NA_Y, color:rgb(0.15,0.15,0.15), borderColor:rgb(0.15,0.15,0.15), borderWidth:0.4});
-        page.drawText('N', {x:NA_X-3, y:NA_Y-16, size:7, font:boldFont, color:TEXT_DARK});
+        // ── 11. North Arrow — inside map area, bottom-right, pointing UP ──────
+        // Arrow body pointing up: tip at top, base at bottom
+        const NA_CX = MAP_X + MAP_W - 20;  // bottom-right of map
+        const NA_CY = MAP_Y + 18;
+        const NA_R  = 9;
+        // Correct upward-pointing arrow (tip up = North)
+        // In PDF coords: larger y = up, so tip at NA_CY+NA_R, base at NA_CY-NA_R
+        page.drawSvgPath(
+          'M 0 '+NA_R+' L '+(NA_R*0.45)+' 0 L 0 '+(NA_R*0.3)+' L '+(-(NA_R*0.45))+' 0 Z',
+          {x:NA_CX, y:NA_CY, color:BLACK_TEXT, borderWidth:0});
+        // 'N' label above the arrow tip
+        page.drawText('N', {x:NA_CX-3, y:NA_CY+NA_R+2, size:7, font:boldFont, color:BLACK_TEXT});
 
-        // ── 12. Divider above logo ───────────────────────────────────────────
-        page.drawLine({start:{x:PANEL_X+4,y:LOGO_TOP+4},end:{x:PAGE_W-4,y:LOGO_TOP+4},
-          thickness:0.5, color:BORDER});
+        // ── 11. Image / Data Source strip — bottom of map, matches template ──
+        var srcParts = [];
+        if (imgSrc)  srcParts.push('Image Source: ' + imgSrc);
+        if (dataSrc) srcParts.push('Data Source: ' + dataSrc);
+        if (srcParts.length > 0) {
+          var srcText = 'Image Source: ' + (imgSrc||'') +
+            (dataSrc ? ' | Data Source: ' + dataSrc : '');
+          // White semi-transparent background (like template)
+          var srcW = 0;
+          try { srcW = regFont.widthOfTextAtSize(srcText, 5.5); } catch(e) { srcW = 240; }
+          page.drawRectangle({
+            x:MAP_X, y:MAP_Y, width:srcW+12, height:10,
+            color:rgb(1,1,1), opacity:0.75
+          });
+          page.drawText(srcText, {
+            x:MAP_X+4, y:MAP_Y+2,
+            size:5.5, font:regFont, color:TEXT_DARK
+          });
+        }
 
-        // ── 13. Umwelt logo ──────────────────────────────────────────────────
+        // ── 12. Umwelt logo (no divider line above it) ───────────────────────
         const logoAspect = logoImage.width / logoImage.height;
-        const logoH = LOGO_H;
-        const logoW = Math.min(logoH * logoAspect, PANEL_W - 16);
-        page.drawImage(logoImage, {x:PANEL_X+8, y:LOGO_Y, width:logoW, height:logoH});
+        const logoW = Math.min(LOGO_H * logoAspect, PANEL_W - 16);
+        page.drawImage(logoImage, {x:PANEL_X+8, y:LOGO_Y, width:logoW, height:LOGO_H});
 
         // ── 14. Disclaimer ───────────────────────────────────────────────────
+        const DISC_FONT_SIZE = 4.2;
+        const DISC_LINE_H    = 5.8;
+        const DISC_LINES_MAX = 9;
         const disclaimer =
           'This document and the information are subject to Terms and Conditions and ' +
-          'Umwelt (Australia) Pty Ltd ("Umwelt") Copyright. Information is the property ' +
-          'of Umwelt. Solely for the use of the authorised recipient. Umwelt makes no ' +
-          'representation, undertakes no duty and accepts no responsibility to any third ' +
-          'party. APPROVED FOR AND ON BEHALF OF Umwelt';
-        const discLines = wrapText(disclaimer, regFont, DISC_FONT_SIZE, PANEL_W-12);
-        discLines.slice(0, DISC_LINES_MAX).forEach(function(dl,i){
-          page.drawText(dl, {x:PANEL_X+6, y:DISC_BOTTOM+(DISC_LINES_MAX-1-i)*DISC_LINE_H,
-            size:DISC_FONT_SIZE, font:regFont, color:TEXT_MED});
+          'Umwelt (Australia) Pty Ltd ("Umwelt") Copyright in the drawings, information ' +
+          'and data recorded ("the information") is the property of Umwelt. This document ' +
+          'and the information are solely for the use of the authorized recipient and this ' +
+          'document may not be used, copied or reproduced in whole or part for any purpose ' +
+          'other than that which it was supplied by Umwelt. Umwelt makes no representation, ' +
+          'undertakes no duty and accepts no responsibility to any third party who may use ' +
+          'or rely upon this document or the information. APPROVED FOR AND ON BEHALF OF Umwelt';
+        const discLines = wrapText(disclaimer, regFont, DISC_FONT_SIZE, PANEL_W-10);
+        discLines.slice(0, DISC_LINES_MAX).forEach(function(dl, i) {
+          page.drawText(dl, {
+            x:PANEL_X+5,
+            y:DISC_Y_BOT + (DISC_LINES_MAX-1-i)*DISC_LINE_H,
+            size:DISC_FONT_SIZE, font:regFont, color:TEXT_MED
+          });
         });
 
-        // ── 15. Panel separator ──────────────────────────────────────────────
-        page.drawLine({start:{x:PANEL_X,y:0},end:{x:PANEL_X,y:PAGE_H},
-          thickness:0.75, color:rgb(0.2,0.2,0.2)});
-
-        // ── 16. Download ─────────────────────────────────────────────────────
+        // ── 15. Download ─────────────────────────────────────────────────────
         return pdfDoc.save().then(function(pdfBytes){
           const blob = new Blob([pdfBytes],{type:'application/pdf'});
           const url  = URL.createObjectURL(blob);
