@@ -1048,7 +1048,7 @@ function setActiveLayer(i) {
     document.getElementById('table-count').textContent='';
     showFeatureInspector(null);
   } else {
-    renderTable(); showFeatureInspector(null);
+    openAttrTable(); renderTable(); showFeatureInspector(null);
   }
 }
 
@@ -4521,9 +4521,9 @@ function ctxOpenAttrTable() {
   if (ctxLayerIdx < 0) return;
   setActiveLayer(ctxLayerIdx);
   openAttrTable();
-  // Make sure the layer is selected in the table dropdown
+  // Update dropdown value directly without re-triggering onAttrLayerChange
   const sel = document.getElementById('attr-layer-select');
-  if (sel) { sel.value = String(ctxLayerIdx); onAttrLayerChange(); }
+  if (sel) sel.value = String(ctxLayerIdx);
   renderTable();
 }
 
@@ -6886,7 +6886,8 @@ function openClassifyPanel() {
 }
 
 function onClsLayerChange() {
-  const layerIdx = parseInt(document.getElementById('cls-layer').value);
+  let layerIdx = parseInt(document.getElementById('cls-layer').value);
+  if (isNaN(layerIdx)) layerIdx = state.activeLayerIndex;
   const layer = state.layers[layerIdx];
   const fsel = document.getElementById('cls-field');
   fsel.innerHTML = '<option value="">— select field —</option>';
