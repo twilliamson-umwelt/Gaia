@@ -6272,35 +6272,38 @@ function _exportMapPDFWithTemplate(figNum, figTitle, imgSrc, dataSrc) {
   const W = Math.round(rect.width);
   const H = Math.round(rect.height);
 
-  // ── Work out the PDF frame aspect ratio and expand the canvas to match ──────
-  // PDF map frame: (676 - 14.17) × (595.28 - 14.17×2) = 661.83 × 566.94 pt
-  // Aspect ratio ≈ 1.1675 (slightly taller relative to width than typical browser)
+  // ── Match the PDF map frame aspect ratio by cropping (never grey, never stretched) ──
+  // PDF map frame: 661.83 × 566.94 pt → aspect ≈ 1.1675 (wider than tall)
+  // We crop the browser capture to this aspect from the centre so pdf-lib can
+  // draw it at exactly MAP_W × MAP_H with no distortion and no grey bars.
   const PDF_MAP_W = 676 - 14.17;
   const PDF_MAP_H = 595.28 - 14.17 * 2;
-  const pdfAspect = PDF_MAP_W / PDF_MAP_H;   // ~1.167
+  const pdfAspect = PDF_MAP_W / PDF_MAP_H;   // ~1.1675
 
-  // Canvas width stays at W (browser map width). Height is expanded to match
-  // the PDF frame aspect so we capture more map extent vertically.
-  const CW = W;
-  const CH = Math.round(W / pdfAspect);       // taller than the browser window
+  // Determine crop: keep full width, crop height (or vice-versa)
+  let CW, CH, cropX, cropY;
+  if (W / H > pdfAspect) {
+    // Browser is wider than PDF aspect — crop width
+    CH = H;
+    CW = Math.round(H * pdfAspect);
+    cropX = Math.round((W - CW) / 2);
+    cropY = 0;
+  } else {
+    // Browser is taller than PDF aspect — crop height from centre
+    CW = W;
+    CH = Math.round(W / pdfAspect);
+    cropX = 0;
+    cropY = Math.round((H - CH) / 2);
+  }
+  // mapOffset: where the live map sits relative to our crop origin
+  const mapOffsetX = -cropX;
+  const mapOffsetY = -cropY;
 
-  // How much extra we need above/below the current browser view
-  const extraH = CH - H;   // pixels to expand (may be negative if browser is taller)
-  const padTop    = Math.max(0, Math.round(extraH / 2));
-  const padBottom = Math.max(0, extraH - padTop);
-
-  // The browser map element's top-left relative to our expanded canvas
-  const mapOffsetX = 0;
-  const mapOffsetY = padTop;   // map sits padTop px from the top of the canvas
-
-  // ── Build the offscreen canvas at the expanded size ─────────────────────────
+  // ── Build the offscreen canvas at the cropped (PDF-aspect) size ─────────────
   const offscreen = document.createElement('canvas');
   offscreen.width  = CW;
   offscreen.height = CH;
   const ctx = offscreen.getContext('2d', { willReadFrequently: true });
-  const isDark = document.body.classList.contains('dark-mode');
-  ctx.fillStyle = isDark ? '#111920' : '#f0f2f4';
-  ctx.fillRect(0, 0, CW, CH);
   ctx.save();
   ctx.beginPath(); ctx.rect(0, 0, CW, CH); ctx.clip();
 
@@ -6590,40 +6593,95 @@ function _exportMapPDFWithTemplate(figNum, figTitle, imgSrc, dataSrc) {
           color:rgb(0.94,0.96,0.99), borderColor:brdC, borderWidth:0.5
         });
 
-        // Draw simplified Australia outline as SVG path inside the inset box
-        // Australia bounding box: lng 113–154, lat -44 to -10
-        // Inset box: x 684–834, y 168–252 (PDF coords)
+        // ── Inset map: detailed Australia outline + state borders + location ──
         var ausMinLng=113, ausMaxLng=154, ausMinLat=-44, ausMaxLat=-10;
         var ibx=INSET_BOX_X+3, iby=INSET_BOX_Y_BOT+3, ibw=INSET_BOX_W-6, ibh=INSET_BOX_H-6;
         function lngToX(lng){ return ibx + (lng-ausMinLng)/(ausMaxLng-ausMinLng)*ibw; }
         function latToY(lat){ return iby + (lat-ausMinLat)/(ausMaxLat-ausMinLat)*ibh; }
 
-        // Simplified Australia coastal outline (coarse polygon, key points)
-        var ausPath = [
-          [114,-22],[114,-32],[116,-34],[119,-34],[122,-34],[124,-34],[126,-34],
-          [129,-35],[130,-35],[131,-33],[132,-32],[133,-32],[135,-35],[137,-36],
-          [139,-37],[141,-38],[143,-39],[145,-39],[147,-38],[149,-38],[150,-37],
-          [151,-34],[151,-30],[153,-28],[154,-25],[154,-18],[149,-14],[145,-15],
-          [144,-18],[141,-17],[139,-17],[136,-14],[136,-12],[131,-12],[130,-13],
-          [128,-15],[125,-14],[122,-18],[121,-21],[119,-22],[117,-21],[115,-22],[114,-22]
-        ].map(function(p){ return [lngToX(p[0]), latToY(p[1])]; });
-
-        // Draw Australia fill (light grey)
-        var ausD = 'M '+ausPath[0][0].toFixed(1)+' '+ausPath[0][1].toFixed(1);
-        for (var ai=1; ai<ausPath.length; ai++) {
-          ausD += ' L '+ausPath[ai][0].toFixed(1)+' '+ausPath[ai][1].toFixed(1);
+        // Helper: convert array of [lng,lat] to SVG path string
+        function toSvgPath(pts) {
+          var d = 'M '+lngToX(pts[0][0]).toFixed(1)+' '+latToY(pts[0][1]).toFixed(1);
+          for (var pi=1; pi<pts.length; pi++) d += ' L '+lngToX(pts[pi][0]).toFixed(1)+' '+latToY(pts[pi][1]).toFixed(1);
+          return d + ' Z';
         }
-        ausD += ' Z';
-        page.drawSvgPath(ausD, {x:0, y:0, color:rgb(0.78,0.82,0.86), borderColor:brdC, borderWidth:0.4});
 
-        // Draw red dot for map location
+        // Higher-fidelity Australia mainland outline
+        var ausMainland = [
+          [113.2,-22.0],[113.1,-26.0],[113.4,-29.5],[114.6,-31.0],[115.7,-31.9],
+          [116.0,-33.0],[117.0,-34.0],[118.0,-34.5],[119.2,-34.2],[121.0,-33.8],
+          [123.0,-33.9],[124.0,-34.0],[126.0,-33.8],[127.0,-33.9],[128.0,-33.9],
+          [129.0,-34.5],[130.0,-35.0],[131.0,-34.0],[131.8,-32.9],[132.5,-32.0],
+          [133.0,-32.0],[134.0,-33.5],[135.0,-34.5],[136.0,-35.5],[137.0,-35.7],
+          [138.0,-35.7],[139.5,-36.8],[140.7,-38.0],[141.0,-38.5],[142.0,-38.7],
+          [143.5,-39.0],[145.0,-38.8],[146.5,-38.5],[148.0,-38.0],[149.5,-37.5],
+          [150.5,-36.5],[151.0,-35.0],[151.5,-33.5],[152.5,-32.0],[153.0,-29.5],
+          [153.5,-28.0],[153.4,-25.0],[152.5,-22.0],[151.0,-20.0],[149.0,-17.0],
+          [146.0,-15.5],[145.0,-15.0],[143.5,-14.5],[142.0,-14.0],[141.0,-13.0],
+          [139.5,-12.5],[138.0,-12.0],[136.5,-12.0],[135.0,-12.5],[134.0,-13.0],
+          [131.0,-12.0],[130.0,-11.5],[129.5,-12.5],[129.0,-14.0],[128.0,-15.5],
+          [126.5,-14.5],[125.0,-14.0],[124.0,-14.5],[122.5,-17.5],[121.5,-19.5],
+          [120.0,-20.5],[119.0,-21.5],[117.5,-21.0],[116.0,-21.0],[114.5,-22.0],[113.2,-22.0]
+        ];
+
+        // Tasmania
+        var tasmania = [
+          [145.5,-40.5],[146.5,-40.8],[147.5,-41.0],[148.5,-41.5],[148.5,-43.0],
+          [147.5,-43.5],[146.5,-43.5],[145.5,-43.0],[145.0,-42.0],[145.5,-40.5]
+        ];
+
+        // Draw mainland fill
+        page.drawSvgPath(toSvgPath(ausMainland), {x:0, y:0, color:rgb(0.78,0.82,0.86), borderColor:brdC, borderWidth:0.5});
+        // Draw Tasmania fill
+        page.drawSvgPath(toSvgPath(tasmania), {x:0, y:0, color:rgb(0.78,0.82,0.86), borderColor:brdC, borderWidth:0.4});
+
+        // State/territory boundary lines — solid thin lines (pdf-lib has no dashArray)
+        // Each entry is an array of [lng,lat] waypoints forming one border segment
+        var stateBorders = [
+          // WA eastern border: 129°E from north coast to south coast
+          [[129,-13.5],[129,-34.0]],
+          // SA/NT top: 26°S from 129°E to 138°E
+          [[129,-26.0],[138,-26.0]],
+          // NT/QLD border: 138°E from ~17.5°S to 26°S
+          [[138,-17.5],[138,-26.0]],
+          // QLD/SA/NSW corner: 141°E from ~10.5°S to 37.5°S
+          [[141,-10.5],[141,-37.5]],
+          // QLD/NSW border: 29°S from 141°E to ~153°E
+          [[141,-29.0],[153,-29.0]],
+          // NSW/VIC border (approximate Murray River area simplified)
+          [[141,-34.0],[150,-34.0],[150.5,-37.5]]
+        ];
+        var borderColor = rgb(0.60,0.62,0.68);
+        stateBorders.forEach(function(border) {
+          for (var bi=0; bi<border.length-1; bi++) {
+            page.drawLine({
+              start:{x:lngToX(border[bi][0]),   y:latToY(border[bi][1])},
+              end:  {x:lngToX(border[bi+1][0]), y:latToY(border[bi+1][1])},
+              thickness:0.35, color:borderColor
+            });
+          }
+        });
+
+        // Draw location indicator: red circle with cross-hairs
         var dotX = lngToX(mapCentreLng);
         var dotY = latToY(mapCentreLat);
-        // clamp inside box
-        dotX = Math.max(ibx+2, Math.min(ibx+ibw-2, dotX));
-        dotY = Math.max(iby+2, Math.min(iby+ibh-2, dotY));
-        page.drawEllipse({x:dotX, y:dotY, xScale:3, yScale:3,
-          color:rgb(0.9,0.1,0.1), borderColor:rgb(0.7,0,0), borderWidth:0.5});
+        dotX = Math.max(ibx+4, Math.min(ibx+ibw-4, dotX));
+        dotY = Math.max(iby+4, Math.min(iby+ibh-4, dotY));
+        var DR = 4;  // dot radius
+        var CHR = 6; // cross-hair radius
+        // Cross-hairs
+        page.drawLine({start:{x:dotX-CHR,y:dotY}, end:{x:dotX+CHR,y:dotY}, thickness:0.6, color:rgb(0.8,0.05,0.05)});
+        page.drawLine({start:{x:dotX,y:dotY-CHR}, end:{x:dotX,y:dotY+CHR}, thickness:0.6, color:rgb(0.8,0.05,0.05)});
+        // Filled circle
+        page.drawEllipse({x:dotX, y:dotY, xScale:DR, yScale:DR,
+          color:rgb(0.9,0.1,0.1), borderColor:rgb(0.6,0,0), borderWidth:0.5, opacity:0.85});
+        // "Location" label below dot if space permits
+        var lblText = 'Location';
+        var lblX = dotX - 9;
+        var lblY = dotY - DR - 5;
+        if (lblY > iby + 2) {
+          page.drawText(lblText, {x:lblX, y:lblY, size:4, font:regFont, color:rgb(0.6,0,0)});
+        }
 
         // ── 9. Legend entries — above inset box ──────────────────────────────
         const legendRows = getLegendRows();
