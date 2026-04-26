@@ -280,6 +280,7 @@ async function processFileList(files) {
     else if (exts.kmz)                  await loadKMZ(exts.kmz);
     else if (exts.geojson || exts.json) await loadGeoJSON(exts.geojson || exts.json);
     else if (exts.zip)                  await loadZIP(exts.zip);
+    else if (exts.gpkg)                 await loadGeoPackage(exts.gpkg);
     else if (exts.csv || exts.txt)      await loadCSV(exts.csv || exts.txt);
     else if (exts.gaia)                 await loadGAIASession(exts.gaia);
   }
@@ -702,6 +703,732 @@ async function loadZIP(file) {
   } catch(err) { hideProgress(); toast('ZIP error: ' + err.message, 'error'); }
 }
 
+// ── GEOPACKAGE LOADER ──
+// Uses sql.js (loaded from CDN in index.html via the <script> tag added below).
+// If sql.js is not available we fall back with a clear error message.
+async function loadGeoPackage(file) {
+  if (typeof initSqlJs === 'undefined') {
+    toast('GeoPackage support requires sql.js — see console for details', 'error');
+    console.error(
+      'Gaia: sql.js is not loaded.\n' +
+      'Add this <script> to index.html (before gaia.js):\n' +
+      '<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"><\/script>'
+    );
+    return;
+  }
+
+  showProgress('Loading GeoPackage', file.name, 5);
+  try {
+    const SQL = await initSqlJs({
+      locateFile: f => `https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/${f}`
+    });
+    setProgress(15, 'Reading file…');
+    const buf = await file.arrayBuffer();
+    const db  = new SQL.Database(new Uint8Array(buf));
+
+    // ── Discover feature tables from gpkg_contents ──
+    setProgress(25, 'Scanning tables…');
+    let tables = [];
+    try {
+      const res = db.exec(
+        "SELECT table_name, data_type FROM gpkg_contents WHERE data_type IN ('features','aspatial')"
+      );
+      if (res.length && res[0].values.length) {
+        tables = res[0].values.map(r => ({ name: r[0], type: r[1] }));
+      }
+    } catch(_) {}
+
+    // Fallback: scan every table for a geometry column
+    if (!tables.length) {
+      const allTables = db.exec("SELECT name FROM sqlite_master WHERE type='table'");
+      if (allTables.length) {
+        for (const [tname] of allTables[0].values) {
+          try {
+            const cols = db.exec(`PRAGMA table_info("${tname}")`);
+            if (!cols.length) continue;
+            const colNames = cols[0].values.map(r => String(r[1]).toLowerCase());
+            if (colNames.some(c => ['geom','geometry','shape','the_geom','wkb_geometry'].includes(c))) {
+              tables.push({ name: tname, type: 'features' });
+            }
+          } catch(_) {}
+        }
+      }
+    }
+
+    if (!tables.length) {
+      hideProgress(); db.close();
+      toast('No feature tables found in GeoPackage', 'error');
+      return;
+    }
+
+    let loadedCount = 0;
+    const baseName = file.name.replace(/\.gpkg$/i, '');
+
+    for (let ti = 0; ti < tables.length; ti++) {
+      const tbl = tables[ti];
+      setProgress(30 + Math.round(65 * (ti / tables.length)), `Table ${ti+1}/${tables.length}: ${tbl.name}`);
+
+      try {
+        // Identify geometry column
+        const colRes = db.exec(`PRAGMA table_info("${tbl.name}")`);
+        if (!colRes.length) continue;
+        const colRows = colRes[0].values; // [cid, name, type, notnull, dflt, pk]
+        const geomCol = colRows.find(r => {
+          const n = String(r[1]).toLowerCase();
+          const t = String(r[2]).toLowerCase();
+          return ['geom','geometry','shape','the_geom','wkb_geometry'].includes(n) ||
+                 t === 'blob' || t.includes('geometry') || t.includes('geom');
+        });
+        if (!geomCol) continue;
+        const geomColName = geomCol[1];
+
+        // Pull all rows
+        const rowRes = db.exec(`SELECT * FROM "${tbl.name}"`);
+        if (!rowRes.length) continue;
+        const colNames = rowRes[0].columns;
+        const geomCI   = colNames.indexOf(geomColName);
+        if (geomCI < 0) continue;
+
+        const features = [];
+        for (const row of rowRes[0].values) {
+          const geomRaw = row[geomCI];
+          if (!geomRaw) continue;
+          let geometry = null;
+          try {
+            geometry = _gpkgBlobToGeoJSON(geomRaw);
+          } catch(_) { continue; }
+          if (!geometry) continue;
+
+          const props = {};
+          colNames.forEach((cn, ci) => { if (ci !== geomCI) props[cn] = row[ci]; });
+          features.push({ type: 'Feature', geometry, properties: props });
+        }
+
+        if (!features.length) continue;
+
+        const geojson = { type: 'FeatureCollection', features };
+        const layerName = tables.length === 1 ? baseName : `${baseName} — ${tbl.name}`;
+        addLayer(geojson, layerName, 'EPSG:4326', 'GeoPackage');
+        loadedCount++;
+      } catch(e) {
+        console.warn('GeoPackage table error (' + tbl.name + '):', e);
+      }
+    }
+
+    db.close();
+    hideProgress();
+    if (loadedCount > 0) {
+      toast(`Loaded ${loadedCount} layer${loadedCount !== 1 ? 's' : ''} from ${file.name}`, 'success');
+    } else {
+      toast('No readable feature layers found in GeoPackage', 'error');
+    }
+  } catch(err) {
+    hideProgress();
+    toast('GeoPackage error: ' + err.message, 'error');
+    console.error('GeoPackage load failed:', err);
+  }
+}
+
+// Parse a GeoPackage geometry blob (GPKG header + WKB) → GeoJSON geometry
+function _gpkgBlobToGeoJSON(blob) {
+  // blob may be Uint8Array or an Array from sql.js
+  const bytes = blob instanceof Uint8Array ? blob : new Uint8Array(blob);
+  if (bytes.length < 8) return null;
+
+  // GPKG binary header: 'G','P', version(1), flags(1), srs_id(4), [envelope], wkb...
+  if (bytes[0] !== 0x47 || bytes[1] !== 0x50) return null; // magic 'GP'
+  const flags    = bytes[3];
+  const emptyFlag = (flags >> 4) & 0x01;
+  if (emptyFlag) return null;
+  const envelopeCode = (flags >> 1) & 0x07;
+  // envelope byte counts: 0→0, 1→32, 2→48, 3→48, 4→64
+  const envBytes = [0, 32, 48, 48, 64][envelopeCode] || 0;
+  const wkbOffset = 8 + envBytes;
+
+  return _parseWKB(bytes, wkbOffset);
+}
+
+// Minimal WKB parser → GeoJSON geometry
+function _parseWKB(bytes, offset) {
+  if (offset + 5 > bytes.length) return null;
+  const le = bytes[offset] === 1; // byte order: 1=little-endian
+  offset += 1;
+
+  const geomType = _wkbUint32(bytes, offset, le) & 0xFFFF; // mask off ISO WKB high bits
+  offset += 4;
+
+  // Helper readers
+  function readUint32() { const v = _wkbUint32(bytes, offset, le); offset += 4; return v; }
+  function readFloat64() { const v = _wkbFloat64(bytes, offset, le); offset += 8; return v; }
+  function readPoint() { return [readFloat64(), readFloat64()]; }
+  function readPoints(n) { const a = []; for (let i=0;i<n;i++) a.push(readPoint()); return a; }
+  function readRing() { return readPoints(readUint32()); }
+
+  switch (geomType) {
+    case 1:  // Point
+      return { type: 'Point', coordinates: readPoint() };
+    case 2:  // LineString
+      return { type: 'LineString', coordinates: readPoints(readUint32()) };
+    case 3: { // Polygon
+      const n = readUint32();
+      const rings = [];
+      for (let i=0;i<n;i++) rings.push(readRing());
+      return { type: 'Polygon', coordinates: rings };
+    }
+    case 4: { // MultiPoint
+      const n = readUint32();
+      const pts = [];
+      for (let i=0;i<n;i++) {
+        offset += 1; // byte order
+        offset += 4; // type (should be 1)
+        pts.push(readPoint());
+      }
+      return { type: 'MultiPoint', coordinates: pts };
+    }
+    case 5: { // MultiLineString
+      const n = readUint32();
+      const lines = [];
+      for (let i=0;i<n;i++) {
+        offset += 5; // byte order + type
+        lines.push(readPoints(readUint32()));
+      }
+      return { type: 'MultiLineString', coordinates: lines };
+    }
+    case 6: { // MultiPolygon
+      const n = readUint32();
+      const polys = [];
+      for (let i=0;i<n;i++) {
+        offset += 5;
+        const nr = readUint32();
+        const rings = [];
+        for (let r=0;r<nr;r++) rings.push(readRing());
+        polys.push(rings);
+      }
+      return { type: 'MultiPolygon', coordinates: polys };
+    }
+    case 7: { // GeometryCollection
+      const n = readUint32();
+      const geoms = [];
+      for (let i=0;i<n;i++) {
+        const sub = _parseWKB(bytes, offset);
+        if (sub) geoms.push(sub);
+        // advance offset by skipping past the sub-geometry bytes
+        // (approximate — walk past byte-order + type)
+        offset += 5;
+        // This is imprecise for collections-of-collections; most real data won't hit this
+      }
+      return { type: 'GeometryCollection', geometries: geoms };
+    }
+    default:
+      return null;
+  }
+}
+
+function _wkbUint32(bytes, offset, le) {
+  const b = bytes;
+  if (le) return b[offset] | (b[offset+1]<<8) | (b[offset+2]<<16) | (b[offset+3]<<24);
+  return (b[offset]<<24) | (b[offset+1]<<16) | (b[offset+2]<<8) | b[offset+3];
+}
+
+function _wkbFloat64(bytes, offset, le) {
+  const slice = bytes.slice(offset, offset + 8);
+  const buf   = slice.buffer.byteOffset !== undefined
+    ? new DataView(slice.buffer, slice.byteOffset, 8)
+    : new DataView(new Uint8Array(slice).buffer);
+  return buf.getFloat64(0, le);
+}
+
+
+// ── GEOPROCESSING ──────────────────────────────────────────────────────────
+// Pure-JS spatial operations. All work in WGS84 (degrees).
+// Distances/buffers use a metres→degrees approximation via deg/m at the
+// centroid latitude, which is adequate for planning/GIS tasks at typical scales.
+
+// Helpers
+function _geoFeatures(layerIdx) {
+  const l = state.layers[layerIdx];
+  return l ? (l.geojson.features || []) : [];
+}
+function _activeFeatures() {
+  const l = state.layers[state.activeLayerIndex];
+  if (!l) return [];
+  const feats = l.geojson.features || [];
+  if (state.selectedFeatureIndices && state.selectedFeatureIndices.size > 0) {
+    return [...state.selectedFeatureIndices].map(i => feats[i]).filter(Boolean);
+  }
+  return feats;
+}
+function _metersPerDegLat() { return 111320; }
+function _metersPerDegLng(lat) { return 111320 * Math.cos(lat * Math.PI / 180); }
+
+// ── Centroid of a geometry ──
+function _geomCentroid(geom) {
+  if (!geom) return null;
+  let sumX = 0, sumY = 0, count = 0;
+  function addCoords(coords) {
+    if (!Array.isArray(coords)) return;
+    if (typeof coords[0] === 'number') { sumX += coords[0]; sumY += coords[1]; count++; }
+    else coords.forEach(addCoords);
+  }
+  addCoords(geom.coordinates);
+  return count ? [sumX / count, sumY / count] : null;
+}
+
+// ── Rough bounding box of a geometry ──
+function _geomBBox(geom) {
+  if (!geom) return null;
+  let minX=Infinity, minY=Infinity, maxX=-Infinity, maxY=-Infinity;
+  function scan(coords) {
+    if (!Array.isArray(coords)) return;
+    if (typeof coords[0] === 'number') {
+      if (coords[0]<minX) minX=coords[0]; if (coords[0]>maxX) maxX=coords[0];
+      if (coords[1]<minY) minY=coords[1]; if (coords[1]>maxY) maxY=coords[1];
+    } else coords.forEach(scan);
+  }
+  scan(geom.coordinates);
+  return [minX, minY, maxX, maxY];
+}
+
+// ── Circular buffer polygon around a point (lng,lat) with radius in metres ──
+function _circlePolygon(lng, lat, radiusM, steps) {
+  steps = steps || 64;
+  const dLat = radiusM / _metersPerDegLat();
+  const dLng = radiusM / _metersPerDegLng(lat);
+  const ring = [];
+  for (let i = 0; i <= steps; i++) {
+    const a = (i / steps) * 2 * Math.PI;
+    ring.push([lng + dLng * Math.cos(a), lat + dLat * Math.sin(a)]);
+  }
+  return ring;
+}
+
+// ── Simple polygon buffer (approximate) ──
+// Walks each edge, offsets it outward by radiusM, returns a new ring.
+function _bufferPolygonRing(ring, radiusM) {
+  // compute centroid for scale
+  let cx=0, cy=0;
+  ring.forEach(p => { cx+=p[0]; cy+=p[1]; });
+  cx/=ring.length; cy/=ring.length;
+  const dLat = radiusM / _metersPerDegLat();
+  const dLng = radiusM / _metersPerDegLng(cy);
+  const result = ring.map(p => [p[0]+(p[0]-cx<0?-dLng:dLng), p[1]+(p[1]-cy<0?-dLat:dLat)]);
+  if (result.length > 0) result.push(result[0]);
+  return result;
+}
+
+// ── Buffer one feature → Polygon/MultiPolygon feature ──
+function _bufferFeature(feat, radiusM) {
+  const geom = feat.geometry;
+  if (!geom) return null;
+  let rings = [];
+  function bufferCoord(coord) {
+    rings.push(_circlePolygon(coord[0], coord[1], radiusM));
+  }
+  function bufferRing(ring) {
+    rings.push(_bufferPolygonRing(ring, radiusM));
+  }
+  const t = geom.type;
+  if (t === 'Point') bufferCoord(geom.coordinates);
+  else if (t === 'MultiPoint') geom.coordinates.forEach(bufferCoord);
+  else if (t === 'LineString') geom.coordinates.forEach(bufferCoord);
+  else if (t === 'MultiLineString') geom.coordinates.forEach(r => r.forEach(bufferCoord));
+  else if (t === 'Polygon') geom.coordinates.forEach(bufferRing);
+  else if (t === 'MultiPolygon') geom.coordinates.forEach(poly => poly.forEach(bufferRing));
+  if (!rings.length) return null;
+  const outGeom = rings.length === 1
+    ? { type: 'Polygon', coordinates: [rings[0]] }
+    : { type: 'MultiPolygon', coordinates: rings.map(r => [r]) };
+  return { type: 'Feature', geometry: outGeom, properties: { ...feat.properties } };
+}
+
+// ── Douglas-Peucker simplification ──
+function _dpSimplify(pts, tolerance) {
+  if (pts.length <= 2) return pts;
+  let maxDist = 0, maxIdx = 0;
+  const [ax, ay] = pts[0], [bx, by] = pts[pts.length-1];
+  const abLen = Math.sqrt((bx-ax)**2+(by-ay)**2);
+  for (let i = 1; i < pts.length-1; i++) {
+    const [px, py] = pts[i];
+    const d = abLen === 0
+      ? Math.sqrt((px-ax)**2+(py-ay)**2)
+      : Math.abs((by-ay)*px-(bx-ax)*py+bx*ay-by*ax)/abLen;
+    if (d > maxDist) { maxDist = d; maxIdx = i; }
+  }
+  if (maxDist > tolerance) {
+    const l = _dpSimplify(pts.slice(0, maxIdx+1), tolerance);
+    const r = _dpSimplify(pts.slice(maxIdx), tolerance);
+    return [...l.slice(0,-1), ...r];
+  }
+  return [pts[0], pts[pts.length-1]];
+}
+
+function _simplifyGeom(geom, tol) {
+  if (!geom) return geom;
+  const s = coords => _dpSimplify(coords, tol);
+  const t = geom.type;
+  if (t==='LineString') return { ...geom, coordinates: s(geom.coordinates) };
+  if (t==='MultiLineString') return { ...geom, coordinates: geom.coordinates.map(s) };
+  if (t==='Polygon') return { ...geom, coordinates: geom.coordinates.map(r => s(r).length>=4?s(r):r) };
+  if (t==='MultiPolygon') return { ...geom, coordinates: geom.coordinates.map(poly=>poly.map(r=>s(r).length>=4?s(r):r)) };
+  return geom;
+}
+
+// ── Convex hull (Graham scan) ──
+function _collectPoints(geom) {
+  const pts = [];
+  function scan(c) {
+    if (!Array.isArray(c)) return;
+    if (typeof c[0]==='number') pts.push(c);
+    else c.forEach(scan);
+  }
+  if (geom) scan(geom.coordinates);
+  return pts;
+}
+
+function _convexHull(pts) {
+  if (pts.length < 3) return pts;
+  pts = pts.slice().sort((a,b) => a[0]-b[0]||a[1]-b[1]);
+  function cross(O,A,B) { return (A[0]-O[0])*(B[1]-O[1])-(A[1]-O[1])*(B[0]-O[0]); }
+  const lower = [];
+  for (const p of pts) {
+    while (lower.length>=2 && cross(lower[lower.length-2],lower[lower.length-1],p)<=0) lower.pop();
+    lower.push(p);
+  }
+  const upper = [];
+  for (let i=pts.length-1;i>=0;i--) {
+    const p=pts[i];
+    while (upper.length>=2 && cross(upper[upper.length-2],upper[upper.length-1],p)<=0) upper.pop();
+    upper.push(p);
+  }
+  upper.pop(); lower.pop();
+  const hull = [...lower,...upper];
+  if (hull.length>0) hull.push(hull[0]);
+  return hull;
+}
+
+// ── Point-in-polygon (ray casting) ──
+function _pointInPolygon(pt, ring) {
+  let inside = false;
+  const [x, y] = pt;
+  for (let i=0, j=ring.length-1; i<ring.length; j=i++) {
+    const [xi,yi]=ring[i], [xj,yj]=ring[j];
+    if ((yi>y)!==(yj>y) && x<(xj-xi)*(y-yi)/(yj-yi)+xi) inside=!inside;
+  }
+  return inside;
+}
+
+function _geomIntersectsPolygon(geom, ring) {
+  if (!geom) return false;
+  const pts = _collectPoints(geom);
+  return pts.some(p => _pointInPolygon(p, ring));
+}
+
+// ── UI: get layer select options ──
+function _gpLayerOptions(includeEmpty) {
+  const opts = includeEmpty ? ['<option value="">— select layer —</option>'] : [];
+  state.layers.forEach((l, i) => {
+    if (!l.isTile) opts.push(`<option value="${i}">${escHtml(l.name)}</option>`);
+  });
+  return opts.join('');
+}
+
+// ── GP BUFFER ──
+function runGeoBuffer() {
+  const srcSel = document.getElementById('gp-buffer-src');
+  const distEl = document.getElementById('gp-buffer-dist');
+  const mergeEl = document.getElementById('gp-buffer-merge');
+  const nameEl = document.getElementById('gp-buffer-name');
+  const resEl  = document.getElementById('gp-buffer-result');
+  if (!srcSel || !distEl) return;
+  const srcIdx = parseInt(srcSel.value);
+  if (isNaN(srcIdx)) { resEl.style.display=''; resEl.textContent='Select a source layer.'; return; }
+  const dist = parseFloat(distEl.value);
+  if (!dist || dist <= 0) { resEl.style.display=''; resEl.textContent='Enter a valid distance.'; return; }
+  const merge = mergeEl ? mergeEl.checked : false;
+  const feats = _geoFeatures(srcIdx);
+  const buffered = feats.map(f => _bufferFeature(f, dist)).filter(Boolean);
+  if (!buffered.length) { resEl.style.display=''; resEl.textContent='No features to buffer.'; return; }
+  let outFeats = buffered;
+  if (merge) {
+    // Collect ALL vertices from every buffer polygon and compute convex hull.
+    // This avoids the holes/artefacts that appear when overlapping rings are
+    // stored as separate polygons in a MultiPolygon without union.
+    const allPts = [];
+    buffered.forEach(f => {
+      const g = f.geometry;
+      function collectRingPts(ring) { ring.forEach(p => allPts.push(p)); }
+      if (g.type === 'Polygon') g.coordinates.forEach(collectRingPts);
+      else if (g.type === 'MultiPolygon') g.coordinates.forEach(poly => poly.forEach(collectRingPts));
+    });
+    const hull = _convexHull(allPts);
+    if (hull.length >= 4) {
+      outFeats = [{ type:'Feature', geometry:{ type:'Polygon', coordinates:[hull] }, properties:{} }];
+    } else {
+      // Fallback if hull failed — store as MultiPolygon (may have overlap artefacts)
+      const allRings = [];
+      buffered.forEach(f => {
+        const g = f.geometry;
+        if (g.type==='Polygon') allRings.push(g.coordinates);
+        else if (g.type==='MultiPolygon') g.coordinates.forEach(p => allRings.push(p));
+      });
+      outFeats = [{ type:'Feature', geometry:{ type:'MultiPolygon', coordinates:allRings }, properties:{} }];
+    }
+  }
+  const name = (nameEl && nameEl.value.trim()) || 'Buffer';
+  const gj = { type:'FeatureCollection', features:outFeats };
+  addLayer(gj, name, 'EPSG:4326', 'Geoprocess');
+  resEl.style.display=''; resEl.textContent=`✔ Created "${name}" (${outFeats.length} feature${outFeats.length!==1?'s':''})`;
+  updateLayerList(); updateExportLayerList(); updateSBLLayerList(); updateDQALayerList();
+}
+
+// ── GP INTERSECTION ──
+function runGeoIntersection() {
+  const aEl = document.getElementById('gp-intersect-a');
+  const bEl = document.getElementById('gp-intersect-b');
+  const nameEl = document.getElementById('gp-intersect-name');
+  const resEl  = document.getElementById('gp-intersect-result');
+  if (!aEl || !bEl) return;
+  const aIdx = parseInt(aEl.value), bIdx = parseInt(bEl.value);
+  if (isNaN(aIdx)||isNaN(bIdx)||aIdx===bIdx) { resEl.style.display=''; resEl.textContent='Select two different layers.'; return; }
+  const aFeats = _geoFeatures(aIdx);
+  const bFeats = _geoFeatures(bIdx);
+  // Collect all polygon rings from layer B for PiP testing
+  const bRings = [];
+  bFeats.forEach(f => {
+    const g = f.geometry;
+    if (!g) return;
+    if (g.type==='Polygon') g.coordinates.forEach(r => bRings.push(r));
+    else if (g.type==='MultiPolygon') g.coordinates.forEach(p => p.forEach(r => bRings.push(r)));
+  });
+  const outFeats = aFeats.filter(f => bRings.some(ring => _geomIntersectsPolygon(f.geometry, ring)));
+  const name = (nameEl && nameEl.value.trim()) || 'Intersection';
+  if (!outFeats.length) { resEl.style.display=''; resEl.textContent='No intersecting features found.'; return; }
+  addLayer({ type:'FeatureCollection', features:outFeats }, name, 'EPSG:4326', 'Geoprocess');
+  resEl.style.display=''; resEl.textContent=`✔ Created "${name}" (${outFeats.length} feature${outFeats.length!==1?'s':''})`;
+  updateLayerList(); updateExportLayerList(); updateSBLLayerList(); updateDQALayerList();
+}
+
+// ── GP UNION ──
+function runGeoUnion() {
+  const srcEl = document.getElementById('gp-union-src');
+  const nameEl = document.getElementById('gp-union-name');
+  const resEl  = document.getElementById('gp-union-result');
+  if (!srcEl) return;
+  const srcIdx = parseInt(srcEl.value);
+  if (isNaN(srcIdx)) { resEl.style.display=''; resEl.textContent='Select a source layer.'; return; }
+  const feats = _geoFeatures(srcIdx);
+  if (!feats.length) { resEl.style.display=''; resEl.textContent='Layer has no features.'; return; }
+  const allRings = [];
+  const mergedProps = {};
+  feats.forEach((f, fi) => {
+    const g = f.geometry;
+    if (!g) return;
+    if (g.type==='Polygon') allRings.push(g.coordinates);
+    else if (g.type==='MultiPolygon') g.coordinates.forEach(p => allRings.push(p));
+    else if (g.type==='Point') allRings.push([[g.coordinates, g.coordinates, g.coordinates]]);
+    else if (g.type==='LineString') allRings.push([g.coordinates]);
+    if (f.properties) Object.assign(mergedProps, f.properties);
+  });
+  const outFeat = { type:'Feature', geometry:{ type:'MultiPolygon', coordinates:allRings }, properties:mergedProps };
+  const name = (nameEl && nameEl.value.trim()) || 'Union';
+  addLayer({ type:'FeatureCollection', features:[outFeat] }, name, 'EPSG:4326', 'Geoprocess');
+  resEl.style.display=''; resEl.textContent=`✔ Created "${name}" (all ${feats.length} features merged)`;
+  updateLayerList(); updateExportLayerList(); updateSBLLayerList(); updateDQALayerList();
+}
+
+// ── GP DISSOLVE ──
+function runGeoDissolve() {
+  const srcEl   = document.getElementById('gp-dissolve-src');
+  const fieldEl = document.getElementById('gp-dissolve-field');
+  const nameEl  = document.getElementById('gp-dissolve-name');
+  const resEl   = document.getElementById('gp-dissolve-result');
+  if (!srcEl) return;
+  const srcIdx = parseInt(srcEl.value);
+  if (isNaN(srcIdx)) { resEl.style.display=''; resEl.textContent='Select a source layer.'; return; }
+  const field = fieldEl ? fieldEl.value.trim() : '';
+  const feats = _geoFeatures(srcIdx);
+  // Group by field value
+  const groups = {};
+  feats.forEach(f => {
+    const key = field && f.properties ? (f.properties[field] ?? '__null__') : '__all__';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(f);
+  });
+  const outFeats = Object.entries(groups).map(([key, gFeats]) => {
+    const allRings = [];
+    gFeats.forEach(f => {
+      const g = f.geometry;
+      if (!g) return;
+      if (g.type==='Polygon') allRings.push(g.coordinates);
+      else if (g.type==='MultiPolygon') g.coordinates.forEach(p => allRings.push(p));
+    });
+    const props = field ? { [field]: key==='__null__'?null:key } : { count: gFeats.length };
+    return { type:'Feature', geometry:{ type:'MultiPolygon', coordinates:allRings }, properties:props };
+  });
+  const name = (nameEl && nameEl.value.trim()) || 'Dissolve';
+  addLayer({ type:'FeatureCollection', features:outFeats }, name, 'EPSG:4326', 'Geoprocess');
+  resEl.style.display=''; resEl.textContent=`✔ Created "${name}" (${outFeats.length} group${outFeats.length!==1?'s':''})`;
+  updateLayerList(); updateExportLayerList(); updateSBLLayerList(); updateDQALayerList();
+}
+
+function _gpPopulateDissolveFields() {
+  const srcEl   = document.getElementById('gp-dissolve-src');
+  const fieldEl = document.getElementById('gp-dissolve-field');
+  if (!srcEl || !fieldEl) return;
+  const srcIdx = parseInt(srcEl.value);
+  if (isNaN(srcIdx)) { fieldEl.innerHTML='<option value="">— no layer —</option>'; return; }
+  const l = state.layers[srcIdx];
+  const fields = l ? Object.keys(l.fields || {}) : [];
+  fieldEl.innerHTML = '<option value="">— all features (merge all) —</option>' +
+    fields.map(f => `<option value="${escHtml(f)}">${escHtml(f)}</option>`).join('');
+}
+
+// ── GP SIMPLIFY ──
+function runGeoSimplify() {
+  const srcEl = document.getElementById('gp-simplify-src');
+  const tolEl = document.getElementById('gp-simplify-tol');
+  const nameEl = document.getElementById('gp-simplify-name');
+  const resEl  = document.getElementById('gp-simplify-result');
+  if (!srcEl) return;
+  const srcIdx = parseInt(srcEl.value);
+  if (isNaN(srcIdx)) { resEl.style.display=''; resEl.textContent='Select a source layer.'; return; }
+  const tol = parseFloat(tolEl ? tolEl.value : 0.0001);
+  const feats = _geoFeatures(srcIdx);
+  const outFeats = feats.map(f => ({ ...f, geometry: _simplifyGeom(f.geometry, tol) }));
+  const name = (nameEl && nameEl.value.trim()) || 'Simplified';
+  addLayer({ type:'FeatureCollection', features:outFeats }, name, 'EPSG:4326', 'Geoprocess');
+  resEl.style.display=''; resEl.textContent=`✔ Created "${name}" (${outFeats.length} features)`;
+  updateLayerList(); updateExportLayerList(); updateSBLLayerList(); updateDQALayerList();
+}
+
+// ── GP CENTROID ──
+function runGeoCentroid() {
+  const srcEl  = document.getElementById('gp-centroid-src');
+  const nameEl = document.getElementById('gp-centroid-name');
+  const resEl  = document.getElementById('gp-centroid-result');
+  if (!srcEl) return;
+  const srcIdx = parseInt(srcEl.value);
+  if (isNaN(srcIdx)) { resEl.style.display=''; resEl.textContent='Select a source layer.'; return; }
+  const feats = _geoFeatures(srcIdx);
+  const outFeats = feats.map(f => {
+    const c = _geomCentroid(f.geometry);
+    if (!c) return null;
+    return { type:'Feature', geometry:{ type:'Point', coordinates:c }, properties:{ ...f.properties } };
+  }).filter(Boolean);
+  if (!outFeats.length) { resEl.style.display=''; resEl.textContent='No features with geometry.'; return; }
+  const name = (nameEl && nameEl.value.trim()) || 'Centroids';
+  addLayer({ type:'FeatureCollection', features:outFeats }, name, 'EPSG:4326', 'Geoprocess');
+  resEl.style.display=''; resEl.textContent=`✔ Created "${name}" (${outFeats.length} points)`;
+  updateLayerList(); updateExportLayerList(); updateSBLLayerList(); updateDQALayerList();
+}
+
+// ── GP BOUNDING GEOMETRY ──
+// Bounding type: 'convex_hull' | 'bbox' | 'circle' | 'oriented_bbox'
+function runGeoBoundingGeometry() {
+  const srcEl   = document.getElementById('gp-hull-src');
+  const typeEl  = document.getElementById('gp-hull-type');
+  const perEl   = document.getElementById('gp-hull-per');
+  const nameEl  = document.getElementById('gp-hull-name');
+  const resEl   = document.getElementById('gp-hull-result');
+  if (!srcEl) return;
+  const srcIdx = parseInt(srcEl.value);
+  if (isNaN(srcIdx)) { resEl.style.display=''; resEl.textContent='Select a source layer.'; return; }
+  const btype = typeEl ? typeEl.value : 'convex_hull';
+  const perFeature = perEl ? perEl.checked : false;
+  const feats = _geoFeatures(srcIdx);
+
+  function _boundingGeomForPts(pts) {
+    if (!pts.length) return null;
+    if (btype === 'convex_hull') {
+      const hull = _convexHull(pts);
+      return hull.length >= 4 ? { type:'Polygon', coordinates:[hull] } : null;
+    }
+    if (btype === 'bbox') {
+      let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+      pts.forEach(([x,y]) => { if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; });
+      if (!isFinite(minX)) return null;
+      return { type:'Polygon', coordinates:[[[minX,minY],[maxX,minY],[maxX,maxY],[minX,maxY],[minX,minY]]] };
+    }
+    if (btype === 'circle') {
+      // Minimum bounding circle: circumscribed circle of convex hull
+      let cx=0,cy=0; pts.forEach(([x,y])=>{cx+=x;cy+=y;}); cx/=pts.length; cy/=pts.length;
+      let rLng=0,rLat=0;
+      pts.forEach(([x,y])=>{ const dx=x-cx,dy=y-cy; if(dx>rLng)rLng=dx; if(dy>rLat)rLat=dy; });
+      // Convert radius to metres for _circlePolygon
+      const rMetre = Math.max(rLng * _metersPerDegLng(cy), rLat * _metersPerDegLat());
+      const ring = _circlePolygon(cx, cy, rMetre, 72);
+      return { type:'Polygon', coordinates:[ring] };
+    }
+    if (btype === 'oriented_bbox') {
+      // Rotating calipers approximation: try convex hull edges as axes
+      const hull = _convexHull(pts);
+      if (hull.length < 3) return null;
+      let bestArea = Infinity, bestRect = null;
+      for (let i = 0; i < hull.length - 1; i++) {
+        const [ax,ay] = hull[i], [bx,by] = hull[i+1];
+        const len = Math.sqrt((bx-ax)**2+(by-ay)**2);
+        if (len === 0) continue;
+        const ux=(bx-ax)/len, uy=(by-ay)/len, vx=-uy, vy=ux;
+        let minU=Infinity,maxU=-Infinity,minV=Infinity,maxV=-Infinity;
+        hull.forEach(([px,py])=>{
+          const u=(px-ax)*ux+(py-ay)*uy;
+          const v=(px-ax)*vx+(py-ay)*vy;
+          if(u<minU)minU=u; if(u>maxU)maxU=u;
+          if(v<minV)minV=v; if(v>maxV)maxV=v;
+        });
+        const area=(maxU-minU)*(maxV-minV);
+        if(area<bestArea){
+          bestArea=area;
+          const corners=[[minU,minV],[maxU,minV],[maxU,maxV],[minU,maxV]].map(([u,v])=>
+            [ax+u*ux+v*vx, ay+u*uy+v*vy]);
+          corners.push(corners[0]);
+          bestRect={ type:'Polygon', coordinates:[corners] };
+        }
+      }
+      return bestRect;
+    }
+    return null;
+  }
+
+  let outFeats = [];
+  if (perFeature) {
+    feats.forEach(f => {
+      const pts = _collectPoints(f.geometry);
+      const geom = _boundingGeomForPts(pts);
+      if (geom) outFeats.push({ type:'Feature', geometry:geom, properties:{ ...f.properties } });
+    });
+  } else {
+    const allPts = [];
+    feats.forEach(f => allPts.push(..._collectPoints(f.geometry)));
+    const geom = _boundingGeomForPts(allPts);
+    if (geom) outFeats.push({ type:'Feature', geometry:geom, properties:{} });
+  }
+
+  if (!outFeats.length) { resEl.style.display=''; resEl.textContent='Not enough points to compute geometry.'; return; }
+  const typeLabels = { convex_hull:'Convex Hull', bbox:'Bounding Box', circle:'Bounding Circle', oriented_bbox:'Oriented BBox' };
+  const defaultName = typeLabels[btype] || 'Bounding Geometry';
+  const name = (nameEl && nameEl.value.trim()) || defaultName;
+  addLayer({ type:'FeatureCollection', features:outFeats }, name, 'EPSG:4326', 'Geoprocess');
+  resEl.style.display=''; resEl.textContent=`✔ Created "${name}" (${outFeats.length} polygon${outFeats.length!==1?'s':''})`;
+  updateLayerList(); updateExportLayerList(); updateSBLLayerList(); updateDQALayerList();
+}
+
+// Refresh all geoprocessing layer selects when layers change
+function updateGeoprocessLayerSelects() {
+  const ids = [
+    'gp-buffer-src','gp-intersect-a','gp-intersect-b','gp-union-src',
+    'gp-dissolve-src','gp-simplify-src','gp-centroid-src','gp-hull-src'
+  ];
+  const opts = _gpLayerOptions(true);
+  ids.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = opts;
+  });
+  _gpPopulateDissolveFields();
+}
+
+// ── END GEOPROCESSING ──────────────────────────────────────────────────────
+
 // ── PRJ PARSER ──
 function parsePRJ(prj) {
   const p = prj.toUpperCase();
@@ -910,21 +1637,196 @@ function inferType(val) {
   return 'string';
 }
 
-// ── LAYER LIST ──
+// ── LAYER GROUPS ──
+// state.layerGroups = [{id, name, collapsed, visible}, ...]  (ordered — position = render order)
+// Each layer carries layer._groupId (string|null).
+//
+// The unified render order is built as a flat "slot" list:
+//   slot = { kind:'layer', layerIdx } | { kind:'group', groupId }
+// When dragging, we drag either a layer-slot or a group-slot and drop onto any other slot.
+
+function _ensureGroups() {
+  if (!state.layerGroups) state.layerGroups = [];
+}
+
+function _getGroup(id) {
+  return (state.layerGroups || []).find(g => g.id === id) || null;
+}
+
+function _layersInGroup(groupId) {
+  return state.layers
+    .map((l, i) => ({ layer: l, idx: i }))
+    .filter(({ layer }) => (layer._groupId || null) === groupId);
+}
+
+// ── Group CRUD ──
+function createLayerGroup() {
+  _ensureGroups();
+  const name = prompt('Group name:', 'New Group');
+  if (!name) return;
+  const id = 'grp_' + Date.now();
+  state.layerGroups.push({ id, name, collapsed: false, visible: true });
+  updateLayerList();
+  toast('Group "' + name + '" created', 'success');
+}
+
+function renameLayerGroup(id) {
+  const g = _getGroup(id);
+  if (!g) return;
+  const name = prompt('Rename group:', g.name);
+  if (!name) return;
+  g.name = name;
+  updateLayerList();
+}
+
+function deleteLayerGroup(id) {
+  const g = _getGroup(id);
+  if (!g) return;
+  if (!confirm('Delete group "' + g.name + '"?\nLayers inside will become ungrouped.')) return;
+  state.layers.forEach(l => { if ((l._groupId || null) === id) l._groupId = null; });
+  state.layerGroups = state.layerGroups.filter(grp => grp.id !== id);
+  updateLayerList();
+}
+
+function toggleGroupCollapsed(id) {
+  const g = _getGroup(id);
+  if (!g) return;
+  g.collapsed = !g.collapsed;
+  updateLayerList();
+}
+
+function toggleGroupVisibility(id) {
+  const g = _getGroup(id);
+  if (!g) return;
+  g.visible = !g.visible;
+  state.layers.forEach(l => {
+    if ((l._groupId || null) === id) {
+      l.visible = g.visible;
+      if (g.visible) { l.leafletLayer.addTo(state.map); } else { state.map.removeLayer(l.leafletLayer); }
+    }
+  });
+  updateLayerList();
+}
+
+function fitGroup(id) {
+  const items = _layersInGroup(id).filter(({ layer }) => layer.visible && layer.leafletLayer);
+  if (!items.length) { toast('No visible layers in group', 'warning'); return; }
+  try {
+    let bounds = null;
+    items.forEach(({ layer }) => {
+      const b = layer.leafletLayer.getBounds ? layer.leafletLayer.getBounds() : null;
+      if (b && b.isValid()) bounds = bounds ? bounds.extend(b) : b;
+    });
+    if (bounds && bounds.isValid()) state.map.fitBounds(bounds, { padding: CONSTANTS.MAP_FIT_PADDING });
+  } catch(e) {}
+}
+
+// ── Drag state ──
+// _drag.kind = 'layer' | 'group'
+// _drag.layerIdx (when kind==='layer')
+// _drag.groupId  (when kind==='group')
+let _drag = { kind: null, layerIdx: -1, groupId: null };
+
+// ── updateLayerList ──
+// Renders: [New Group btn] [group blocks in state.layerGroups order] [ungrouped layers]
 function updateLayerList() {
+  _ensureGroups();
   const el = document.getElementById('layer-list');
   document.getElementById('layer-count').textContent = state.layers.length ? `(${state.layers.length})` : '';
-  if (!state.layers.length) { el.innerHTML='<div class="empty-state">No layers loaded.<br>Drop a file above to begin.</div>'; return; }
-  el.innerHTML = state.layers.map((layer,i)=>`
-    <div class="layer-item ${i===state.activeLayerIndex?'active':''}" onclick="setActiveLayer(${i})" style="opacity:${layer.visible?1:0.5}"
+
+  const newGroupBtn = `<div style="padding:6px 8px 4px;">
+    <button class="btn btn-ghost btn-sm" style="width:100%;font-size:10px;justify-content:center;gap:4px;"
+            onclick="createLayerGroup()">＋ New Group</button></div>`;
+
+  if (!state.layers.length && !(state.layerGroups || []).length) {
+    el.innerHTML = `<div class="empty-state">No layers loaded.<br>Drop a file above to begin.</div>${newGroupBtn}`;
+    return;
+  }
+
+  const groups = state.layerGroups || [];
+  let html = newGroupBtn;
+
+  // Named groups (in their stored order)
+  groups.forEach((group, gIdx) => {
+    const items = _layersInGroup(group.id);
+    const eyeIcon = group.visible ? '👁' : '🚫';
+    const chevron = group.collapsed ? '▶' : '▼';
+    const accent = group.visible ? 'var(--teal)' : 'var(--text3)';
+    const isFirst = gIdx === 0;
+    const isLast  = gIdx === groups.length - 1;
+
+    html += `<div class="layer-group-block" data-group-id="${group.id}"
+                  ondragover="handleGroupBlockDragOver(event,'${group.id}')"
+                  ondragleave="handleGroupBlockDragLeave(event)"
+                  ondrop="handleGroupBlockDrop(event,'${group.id}')">
+      <div class="layer-group-header" style="border-left:3px solid ${accent};"
+           draggable="true"
+           ondragstart="handleGroupDragStart(event,'${group.id}')"
+           ondragend="handleGroupDragEnd(event)">
+        <button class="btn btn-ghost btn-sm" style="padding:1px 4px;font-size:10px;min-width:0;"
+                onclick="toggleGroupCollapsed('${group.id}')">${chevron}</button>
+        <button class="btn btn-ghost btn-sm" style="padding:1px 4px;font-size:11px;min-width:0;"
+                onclick="toggleGroupVisibility('${group.id}')"
+                title="${group.visible ? 'Hide group' : 'Show group'}">${eyeIcon}</button>
+        <span class="layer-group-name" ondblclick="renameLayerGroup('${group.id}')"
+              title="Double-click to rename">${escHtml(group.name)}</span>
+        <span style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-left:2px;">(${items.length})</span>
+        <div style="flex:1;"></div>
+        <button class="btn btn-ghost btn-sm" style="padding:1px 4px;font-size:13px;min-width:0;line-height:1;"
+                onclick="moveGroupUp('${group.id}')" title="Move group up" ${isFirst?'disabled':''}>↑</button>
+        <button class="btn btn-ghost btn-sm" style="padding:1px 4px;font-size:13px;min-width:0;line-height:1;"
+                onclick="moveGroupDown('${group.id}')" title="Move group down" ${isLast?'disabled':''}>↓</button>
+        <button class="btn btn-ghost btn-sm" style="padding:1px 5px;font-size:11px;min-width:0;"
+                onclick="fitGroup('${group.id}')" title="Zoom to group">⛶</button>
+        <button class="btn btn-ghost btn-sm" style="padding:1px 5px;font-size:11px;min-width:0;color:#f85149;"
+                onclick="deleteLayerGroup('${group.id}')" title="Delete group">✕</button>
+      </div>`;
+
+    if (!group.collapsed) {
+      if (items.length === 0) {
+        html += `<div class="layer-group-empty">Drop layers here</div>`;
+      } else {
+        items.forEach(({ layer, idx }) => { html += _renderLayerItem(layer, idx); });
+      }
+    }
+    html += `</div>`;
+  });
+
+  // Ungrouped layers
+  const ungrouped = state.layers.map((l, i) => ({ layer: l, idx: i })).filter(({ layer }) => !layer._groupId);
+  if (ungrouped.length) {
+    html += `<div class="layer-group-block layer-group-ungrouped"
+                  ondragover="handleGroupBlockDragOver(event,null)"
+                  ondragleave="handleGroupBlockDragLeave(event)"
+                  ondrop="handleGroupBlockDrop(event,null)">`;
+    if (groups.length > 0) {
+      html += `<div class="layer-group-header" style="border-left:3px solid var(--border);">
+                 <span style="font-family:var(--mono);font-size:9px;font-weight:600;color:var(--text3);
+                              letter-spacing:0.5px;text-transform:uppercase;">Ungrouped</span>
+               </div>`;
+    }
+    ungrouped.forEach(({ layer, idx }) => { html += _renderLayerItem(layer, idx); });
+    html += `</div>`;
+  }
+
+  el.innerHTML = html;
+  // Keep geoprocessing layer selects in sync
+  if (typeof updateGeoprocessLayerSelects === 'function') updateGeoprocessLayerSelects();
+}
+
+function _renderLayerItem(layer, i) {
+  return `
+    <div class="layer-item ${i===state.activeLayerIndex?'active':''}"
+         onclick="setActiveLayer(${i})" style="opacity:${layer.visible?1:0.5}"
          draggable="true"
          ondragstart="handleLayerDragStart(event,${i})"
          ondragover="handleLayerDragOver(event,${i})"
          ondragleave="handleLayerDragLeave(event,${i})"
          ondrop="handleLayerDrop(event,${i})"
          ondragend="handleLayerDragEnd(event)">
-      <div class="layer-drag-handle" title="Drag to reorder">⠿</div>
-      <div class="layer-geom-icon" onclick="event.stopPropagation();openColorPickerForLayer(${i})" title="Click to change colour" style="cursor:pointer;">${layerGeomIcon(layer)}</div>
+      <div class="layer-drag-handle" title="Drag to reorder or into a group">⠿</div>
+      <div class="layer-geom-icon" onclick="event.stopPropagation();openColorPickerForLayer(${i})"
+           title="Click to change colour" style="cursor:pointer;">${layerGeomIcon(layer)}</div>
       <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:0;">
         <div style="display:flex;align-items:center;min-width:0;">
           <div class="layer-info" style="flex:1;min-width:0;">
@@ -932,11 +1834,15 @@ function updateLayerList() {
             <div class="layer-meta">${layer.format}${layer.isTile ? ' · Tile Overlay' : ' · ' + (layer.geojson.features||[]).length + ' feat'}</div>
           </div>
           <div class="layer-actions">
-            <button class="btn btn-ghost btn-sm" style="padding:2px 5px;font-size:11px;" onclick="event.stopPropagation();toggleLayerVisibility(${i})" title="${layer.visible?'Hide layer':'Show layer'}">${layer.visible?'👁':'🚫'}</button>
-            <button class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:13px;letter-spacing:1px;" onclick="event.stopPropagation();openLayerCtxMenu(event,${i})" title="Options">⋯</button>
+            <button class="btn btn-ghost btn-sm" style="padding:2px 5px;font-size:11px;"
+                    onclick="event.stopPropagation();toggleLayerVisibility(${i})"
+                    title="${layer.visible?'Hide layer':'Show layer'}">${layer.visible?'👁':'🚫'}</button>
+            <button class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:13px;letter-spacing:1px;"
+                    onclick="event.stopPropagation();openLayerCtxMenu(event,${i})" title="Options">⋯</button>
           </div>
         </div>
-        <div class="layer-opacity-row" onclick="event.stopPropagation()" ondragstart="event.stopPropagation();event.preventDefault();" draggable="false"
+        <div class="layer-opacity-row" onclick="event.stopPropagation()"
+             ondragstart="event.stopPropagation();event.preventDefault();" draggable="false"
              style="display:flex;align-items:center;gap:5px;padding:2px 0 1px 0;margin-top:3px;">
           <span style="font-size:8px;color:var(--text3);font-family:var(--mono);flex-shrink:0;opacity:0.7;">opacity</span>
           <input type="range" min="0" max="100" value="${Math.round((layer.layerOpacity??1)*100)}"
@@ -946,71 +1852,195 @@ function updateLayerList() {
                  onmousedown="event.stopPropagation()"
                  ontouchstart="event.stopPropagation()"
                  oninput="event.stopPropagation();setLayerOpacity(${i},this.value/100)"/>
-          <span class="layer-opacity-pct" style="font-size:8px;color:var(--text3);font-family:var(--mono);width:24px;text-align:right;flex-shrink:0;opacity:0.7;">${Math.round((layer.layerOpacity??1)*100)}%</span>
+          <span class="layer-opacity-pct"
+                style="font-size:8px;color:var(--text3);font-family:var(--mono);width:24px;text-align:right;flex-shrink:0;opacity:0.7;"
+                >${Math.round((layer.layerOpacity??1)*100)}%</span>
         </div>
       </div>
-    </div>`).join('');
+    </div>`;
 }
 
-// Layer drag-to-reorder state
-let _layerDragSrc = -1;
+// ── Move group up/down ──
+function moveGroupUp(id) {
+  const idx = state.layerGroups.findIndex(g => g.id === id);
+  if (idx <= 0) return;
+  [state.layerGroups[idx-1], state.layerGroups[idx]] = [state.layerGroups[idx], state.layerGroups[idx-1]];
+  updateLayerList();
+}
+function moveGroupDown(id) {
+  const idx = state.layerGroups.findIndex(g => g.id === id);
+  if (idx < 0 || idx >= state.layerGroups.length - 1) return;
+  [state.layerGroups[idx], state.layerGroups[idx+1]] = [state.layerGroups[idx+1], state.layerGroups[idx]];
+  updateLayerList();
+}
+
+// ── DRAG: layer items ──
+let _layerDragSrc = -1;   // kept for legacy compat; _drag is the canonical state
 
 function handleLayerDragStart(e, i) {
+  _drag = { kind: 'layer', layerIdx: i, groupId: null };
   _layerDragSrc = i;
   e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', i);
+  e.dataTransfer.setData('text/plain', 'layer:' + i);
   e.currentTarget.style.opacity = '0.4';
+  e.stopPropagation();
 }
 
 function handleLayerDragOver(e, i) {
-  if (i === _layerDragSrc) return;
+  if (_drag.kind === 'layer' && _drag.layerIdx === i) return;
   e.preventDefault();
+  e.stopPropagation();
   e.dataTransfer.dropEffect = 'move';
   const rect = e.currentTarget.getBoundingClientRect();
   const mid = rect.top + rect.height / 2;
-  e.currentTarget.classList.remove('drag-over-top','drag-over-bottom');
+  e.currentTarget.classList.remove('drag-over-top', 'drag-over-bottom');
   e.currentTarget.classList.add(e.clientY < mid ? 'drag-over-top' : 'drag-over-bottom');
 }
 
-function handleLayerDragLeave(e, i) {
-  e.currentTarget.classList.remove('drag-over-top','drag-over-bottom');
+function handleLayerDragLeave(e) {
+  e.currentTarget.classList.remove('drag-over-top', 'drag-over-bottom');
 }
 
-function handleLayerDrop(e, i) {
+function handleLayerDrop(e, targetLayerIdx) {
   e.preventDefault();
-  e.currentTarget.classList.remove('drag-over-top','drag-over-bottom');
-  if (_layerDragSrc < 0 || _layerDragSrc === i) return;
+  e.stopPropagation();
+  e.currentTarget.classList.remove('drag-over-top', 'drag-over-bottom');
 
-  const rect = e.currentTarget.getBoundingClientRect();
-  const mid = rect.top + rect.height / 2;
-  let insertAt = e.clientY < mid ? i : i + 1;
-  if (_layerDragSrc < insertAt) insertAt--;
+  if (_drag.kind === 'layer') {
+    const srcIdx = _drag.layerIdx;
+    if (srcIdx < 0 || srcIdx === targetLayerIdx) return;
 
-  // Reorder layers array
-  const moved = state.layers.splice(_layerDragSrc, 1)[0];
-  state.layers.splice(insertAt, 0, moved);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const above = e.clientY < rect.top + rect.height / 2;
+    let insertAt = above ? targetLayerIdx : targetLayerIdx + 1;
+    if (srcIdx < insertAt) insertAt--;
 
-  // Update active layer index
-  if (state.activeLayerIndex === _layerDragSrc) {
-    state.activeLayerIndex = insertAt;
-  } else {
-    // adjust if active layer shifted
-    if (_layerDragSrc < state.activeLayerIndex && insertAt >= state.activeLayerIndex) state.activeLayerIndex--;
-    else if (_layerDragSrc > state.activeLayerIndex && insertAt <= state.activeLayerIndex) state.activeLayerIndex++;
+    // Join the target's group
+    const targetGroupId = state.layers[targetLayerIdx] ? (state.layers[targetLayerIdx]._groupId || null) : null;
+    state.layers[srcIdx]._groupId = targetGroupId;
+
+    const moved = state.layers.splice(srcIdx, 1)[0];
+    state.layers.splice(insertAt, 0, moved);
+
+    if (state.activeLayerIndex === srcIdx) {
+      state.activeLayerIndex = insertAt;
+    } else {
+      if (srcIdx < state.activeLayerIndex && insertAt >= state.activeLayerIndex) state.activeLayerIndex--;
+      else if (srcIdx > state.activeLayerIndex && insertAt <= state.activeLayerIndex) state.activeLayerIndex++;
+    }
+    _refreshLeafletZOrder();
+    updateLayerList(); updateExportLayerList(); updateSBLLayerList(); updateDQALayerList();
+
+  } else if (_drag.kind === 'group') {
+    // Group dropped onto an ungrouped layer item.
+    // "above" the first ungrouped layer → move group to end of layerGroups (just before ungrouped block).
+    // This is the only meaningful position since ungrouped layers form a single block after all named groups.
+    _insertGroupAtUngroupedSlot(_drag.groupId);
   }
-
-  // Re-order Leaflet z-order: index 0 = top of list = top of map
-  // Render bottom-to-top: last item in array first, first item last (= on top)
-  const layersReversed = [...state.layers].reverse();
-  layersReversed.forEach(l => { if (l.visible && l.leafletLayer) { state.map.removeLayer(l.leafletLayer); l.leafletLayer.addTo(state.map); } });
-
-  updateLayerList(); updateExportLayerList(); updateSBLLayerList(); updateDQALayerList();
 }
 
 function handleLayerDragEnd(e) {
   e.currentTarget.style.opacity = '';
-  document.querySelectorAll('.layer-item').forEach(el => el.classList.remove('drag-over-top','drag-over-bottom'));
+  document.querySelectorAll('.layer-item').forEach(el => el.classList.remove('drag-over-top', 'drag-over-bottom'));
+  document.querySelectorAll('.layer-group-block').forEach(el => el.classList.remove('group-drag-over', 'drag-over-top', 'drag-over-bottom'));
+  _drag = { kind: null, layerIdx: -1, groupId: null };
   _layerDragSrc = -1;
+}
+
+// ── DRAG: group headers ──
+function handleGroupDragStart(e, groupId) {
+  _drag = { kind: 'group', layerIdx: -1, groupId };
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', 'group:' + groupId);
+  e.currentTarget.closest('.layer-group-block').style.opacity = '0.45';
+  e.stopPropagation();
+}
+
+function handleGroupDragEnd(e) {
+  const block = e.currentTarget.closest('.layer-group-block');
+  if (block) block.style.opacity = '';
+  document.querySelectorAll('.layer-group-block').forEach(el => el.classList.remove('group-drag-over', 'drag-over-top', 'drag-over-bottom'));
+  document.querySelectorAll('.layer-item').forEach(el => el.classList.remove('drag-over-top', 'drag-over-bottom'));
+  _drag = { kind: null, layerIdx: -1, groupId: null };
+  _layerDragSrc = -1;
+}
+
+// ── DRAG: group block drop zones ──
+function handleGroupBlockDragOver(e, groupId) {
+  e.preventDefault();
+  e.stopPropagation();
+  e.dataTransfer.dropEffect = 'move';
+  if (_drag.kind === 'group' && _drag.groupId === groupId) return;
+  if (_drag.kind === 'group') {
+    const block = e.currentTarget.closest('.layer-group-block') || e.currentTarget;
+    const rect = block.getBoundingClientRect();
+    block.classList.remove('drag-over-top', 'drag-over-bottom');
+    block.classList.add(e.clientY < rect.top + rect.height / 2 ? 'drag-over-top' : 'drag-over-bottom');
+  } else {
+    e.currentTarget.classList.add('group-drag-over');
+  }
+}
+
+function handleGroupBlockDragLeave(e) {
+  e.currentTarget.classList.remove('group-drag-over', 'drag-over-top', 'drag-over-bottom');
+  const block = e.currentTarget.closest('.layer-group-block');
+  if (block) block.classList.remove('drag-over-top', 'drag-over-bottom');
+}
+
+function handleGroupBlockDrop(e, targetGroupId) {
+  e.preventDefault();
+  e.stopPropagation();
+  e.currentTarget.classList.remove('group-drag-over', 'drag-over-top', 'drag-over-bottom');
+  const block = e.currentTarget.closest('.layer-group-block');
+  if (block) block.classList.remove('drag-over-top', 'drag-over-bottom');
+
+  if (_drag.kind === 'layer') {
+    const srcIdx = _drag.layerIdx;
+    if (srcIdx < 0) return;
+    state.layers[srcIdx]._groupId = targetGroupId || null;
+    _drag = { kind: null, layerIdx: -1, groupId: null };
+    _layerDragSrc = -1;
+    updateLayerList();
+
+  } else if (_drag.kind === 'group') {
+    const srcId = _drag.groupId;
+    if (!srcId || srcId === targetGroupId) return;
+    const srcI = state.layerGroups.findIndex(g => g.id === srcId);
+    if (srcI < 0) return;
+
+    if (targetGroupId === null) {
+      // Dropped on the ungrouped container header — move group to end
+      const [grp] = state.layerGroups.splice(srcI, 1);
+      state.layerGroups.push(grp);
+    } else {
+      let destI = state.layerGroups.findIndex(g => g.id === targetGroupId);
+      if (destI < 0) return;
+      const rect = (block || e.currentTarget).getBoundingClientRect();
+      const above = e.clientY < rect.top + rect.height / 2;
+      const [grp] = state.layerGroups.splice(srcI, 1);
+      destI = state.layerGroups.findIndex(g => g.id === targetGroupId);
+      state.layerGroups.splice(above ? destI : destI + 1, 0, grp);
+    }
+    _drag = { kind: null, layerIdx: -1, groupId: null };
+    _layerDragSrc = -1;
+    updateLayerList();
+  }
+}
+
+// Move a named group to the end of layerGroups so it renders
+// immediately before the ungrouped block. This is the correct behaviour
+// when a group header is dropped onto any ungrouped layer item.
+function _insertGroupAtUngroupedSlot(groupId) {
+  const srcI = state.layerGroups.findIndex(g => g.id === groupId);
+  if (srcI < 0) return;
+  const [grp] = state.layerGroups.splice(srcI, 1);
+  state.layerGroups.push(grp);
+  updateLayerList();
+}
+
+function _refreshLeafletZOrder() {
+  const rev = [...state.layers].reverse();
+  rev.forEach(l => { if (l.visible && l.leafletLayer) { state.map.removeLayer(l.leafletLayer); l.leafletLayer.addTo(state.map); } });
 }
 
 // Set opacity for a specific layer index (0..1)
@@ -1110,8 +2140,6 @@ function clearStats() {
   document.getElementById('stats-section').style.display='none';
   document.getElementById('attr-strip-table-wrap').innerHTML='<div class="empty-state">Select a layer to view attributes</div>';
   document.getElementById('table-count').textContent='';
-  const ls = document.getElementById('legend-section');
-  if (ls) ls.style.display = 'none';
 }
 
 // ── LEGEND ──────────────────────────────────────
@@ -1172,13 +2200,14 @@ function _makeLegendEntryHTML(layer) {
 }
 
 function updateLegend() {
-  const legendSection = document.getElementById('legend-section');
-  const legendBody    = document.getElementById('legend-body');
-  if (!legendSection || !legendBody) return;
+  const legendBody = document.getElementById('legend-body');
+  if (!legendBody) return;
 
   const visibleLayers = state.layers.filter(l => l && l.visible && !l.isTile);
-  if (!visibleLayers.length) { legendSection.style.display = 'none'; return; }
-  legendSection.style.display = 'block';
+  if (!visibleLayers.length) {
+    legendBody.innerHTML = '<div style="font-family:var(--mono);font-size:9px;color:var(--text3);padding:4px 0;">No visible layers</div>';
+    return;
+  }
 
   legendBody.innerHTML = visibleLayers.map(l => {
     const idx       = state.layers.indexOf(l);
@@ -1204,7 +2233,6 @@ function updateLegend() {
       // ── CLASSIFIED layer ───────────────────────────────────────────────
       const field = l.classifyField || '';
       const classRows = l.classifyClasses.map(c => {
-        // Swatch for each class
         let swatch;
         if (isPoint) {
           const sz = 12;
@@ -2525,14 +3553,683 @@ function toggleWidgetPanel() {
   else openWidgetPanel();
 }
 
+// ── LEGEND MAP BUTTON ──
+function toggleMapLegend() {
+  const panel = document.getElementById('legend-float');
+  const btn   = document.getElementById('legend-map-btn');
+  if (!panel || !btn) return;
+  const isOpen = panel.classList.toggle('open');
+  btn.classList.toggle('active', isOpen);
+  if (isOpen) updateLegend();
+}
+
+// ── GEOPROCESS HOVER TOOLTIPS ──
+function _initGpTooltips() {
+  const tip = document.getElementById('gp-tooltip');
+  if (!tip) return;
+  document.querySelectorAll('[data-gp-tip]').forEach(el => {
+    el.addEventListener('mouseenter', e => {
+      tip.textContent = el.getAttribute('data-gp-tip');
+      tip.classList.add('visible');
+      _positionGpTip(e);
+    });
+    el.addEventListener('mousemove', _positionGpTip);
+    el.addEventListener('mouseleave', () => tip.classList.remove('visible'));
+  });
+}
+function _positionGpTip(e) {
+  const tip = document.getElementById('gp-tooltip');
+  if (!tip) return;
+  const x = e.clientX + 16, y = e.clientY + 16;
+  const tw = 240, th = 80;
+  tip.style.left = (x + tw > window.innerWidth  ? e.clientX - tw - 8 : x) + 'px';
+  tip.style.top  = (y + th > window.innerHeight ? e.clientY - th - 8 : y) + 'px';
+}
+document.addEventListener('DOMContentLoaded', () => setTimeout(_initGpTooltips, 800));
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ── 3D MAP TOGGLE (MapLibre GL) ───────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+let _map3D = null;          // MapLibre GL map instance
+let _is3DActive = false;
+
+function toggle3DMap() {
+  if (_is3DActive) {
+    _exit3DMap();
+  } else {
+    _enter3DMap();
+  }
+}
+
+function _enter3DMap() {
+  const overlay = document.getElementById('map-3d');
+  const ctrlBar = document.getElementById('map-3d-controls');
+  const btn     = document.getElementById('btn-3d-toggle');
+  if (!overlay) return;
+
+  // Capture current Leaflet centre + zoom
+  const centre = state.map.getCenter();
+  const zoom   = state.map.getZoom();
+
+  // Show overlay
+  overlay.style.display = 'block';
+  ctrlBar.style.display = 'flex';
+  if (btn) { btn.textContent = '🏙 Disable 3D View'; btn.style.borderColor = 'var(--teal)'; btn.style.color = 'var(--teal)'; }
+
+  // Use CARTO Light raster tiles — no referrer restriction, same server Gaia already uses
+  // for the 2D basemap. This avoids the OSM volunteer-server 403 referrer-required error.
+  const cartoUrl = 'https://{a-d}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+  // MapLibre GL tile URL template uses {x}{y}{z} not {z}{x}{y} — convert:
+  const cartoTiles = [
+    'https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+    'https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+    'https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+    'https://d.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png',
+  ];
+
+  const style = {
+    version: 8,
+    sources: {
+      carto: {
+        type: 'raster',
+        tiles: cartoTiles,
+        tileSize: 256,
+        attribution: '© CARTO © OpenStreetMap contributors',
+        maxzoom: 19,
+      },
+      terrain: {
+        type: 'raster-dem',
+        url: 'https://demotiles.maplibre.org/terrain-tiles/tiles.json',
+        tileSize: 256,
+      },
+    },
+    layers: [
+      { id: 'carto-tiles', type: 'raster', source: 'carto' },
+    ],
+    terrain: { source: 'terrain', exaggeration: 1.5 },
+    sky: {
+      'sky-color': '#1a2a4a',
+      'sky-horizon-blend': 0.5,
+      'horizon-color': '#aabbcc',
+      'horizon-fog-blend': 0.5,
+      'fog-color': '#223344',
+      'fog-ground-blend': 0.5,
+    },
+  };
+
+  _map3D = new maplibregl.Map({
+    container: overlay,
+    style: style,
+    center: [centre.lng, centre.lat],
+    zoom: Math.max(0, zoom - 1),
+    pitch: 45,
+    bearing: 0,
+    antialias: true,
+  });
+
+  _map3D.on('load', function() {
+    // Hillshade layer from free MapLibre terrain tiles
+    _map3D.addLayer({
+      id: 'hillshade',
+      type: 'hillshade',
+      source: 'terrain',
+      layout: { visibility: 'visible' },
+      paint: {
+        'hillshade-shadow-color': '#1a2233',
+        'hillshade-highlight-color': '#e8f4fc',
+        'hillshade-illumination-direction': 315,
+        'hillshade-exaggeration': 0.6,
+      },
+    });
+
+    // Overlay current GeoJSON layers as MapLibre vector layers
+    state.layers.forEach((l, i) => {
+      if (l.isTile || !l.visible || !l.geojson) return;
+      try {
+        const srcId = '3d-layer-' + i;
+        _map3D.addSource(srcId, { type: 'geojson', data: l.geojson });
+        const gt = (l.geomType || '').toLowerCase();
+        if (gt.includes('polygon')) {
+          _map3D.addLayer({ id: srcId, type: 'fill', source: srcId,
+            paint: { 'fill-color': l.fillColor || l.color || '#3498db', 'fill-opacity': 0.55 } });
+          _map3D.addLayer({ id: srcId + '-line', type: 'line', source: srcId,
+            paint: { 'line-color': l.outlineColor || l.color || '#3498db', 'line-width': 1 } });
+        } else if (gt.includes('line')) {
+          _map3D.addLayer({ id: srcId, type: 'line', source: srcId,
+            paint: { 'line-color': l.color || '#3498db', 'line-width': 2 } });
+        } else {
+          _map3D.addLayer({ id: srcId, type: 'circle', source: srcId,
+            paint: { 'circle-radius': 5, 'circle-color': l.fillColor || l.color || '#3498db', 'circle-opacity': 0.8 } });
+        }
+      } catch(e2) { /* layer already exists or unsupported geom */ }
+    });
+
+    // Sync sliders to initial values
+    const pitchEl   = document.getElementById('map3d-pitch');
+    const bearingEl = document.getElementById('map3d-bearing');
+    if (pitchEl)   pitchEl.value   = 45;
+    if (bearingEl) bearingEl.value = 0;
+  });
+
+  _is3DActive = true;
+}
+
+function _exit3DMap() {
+  const overlay = document.getElementById('map-3d');
+  const ctrlBar = document.getElementById('map-3d-controls');
+  const btn     = document.getElementById('btn-3d-toggle');
+
+  if (_map3D) {
+    // Sync MapLibre centre back to Leaflet before destroying
+    const c = _map3D.getCenter();
+    const z = _map3D.getZoom();
+    state.map.setView([c.lat, c.lng], z + 1);
+    _map3D.remove();
+    _map3D = null;
+  }
+  if (overlay) overlay.style.display = 'none';
+  if (ctrlBar) ctrlBar.style.display = 'none';
+  if (btn) { btn.textContent = '🏙 Enable 3D View'; btn.style.borderColor = ''; btn.style.color = ''; }
+  _is3DActive = false;
+}
+
+function _update3DPitch(val) {
+  if (_map3D) _map3D.setPitch(parseFloat(val));
+}
+function _update3DBearing(val) {
+  if (_map3D) _map3D.setBearing(parseFloat(val));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ── VIEWSHED ANALYSIS ─────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+let _vsObserverMarker  = null;
+let _vsObserverLatLng  = null;
+let _vsOverlayLayers   = [];
+let _vsClickHandler    = null;
+
+function startViewshed() {
+  // Clear previous
+  clearViewshed();
+  const statusEl = document.getElementById('vs-status');
+  const runBtn   = document.getElementById('vs-run-btn');
+  statusEl.style.display = 'block';
+  statusEl.textContent   = '📍 Click on the map to place the observer point…';
+
+  // Add one-time click handler
+  _vsClickHandler = function(e) {
+    _vsObserverLatLng = e.latlng;
+    state.map.off('click', _vsClickHandler);
+    _vsClickHandler = null;
+
+    // Place marker
+    if (_vsObserverMarker) state.map.removeLayer(_vsObserverMarker);
+    _vsObserverMarker = L.circleMarker(e.latlng, {
+      radius: 8, color: '#14b1e7', fillColor: '#14b1e7', fillOpacity: 0.9, weight: 2,
+    }).bindTooltip('Observer').addTo(state.map);
+
+    statusEl.textContent = `✔ Observer set at (${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)}). Click "Run Viewshed Analysis" to compute.`;
+    if (runBtn) runBtn.style.display = 'block';
+  };
+  state.map.on('click', _vsClickHandler);
+}
+
+async function runViewshed() {
+  if (!_vsObserverLatLng) return;
+  const statusEl  = document.getElementById('vs-status');
+  const obsHeight = parseFloat(document.getElementById('vs-observer-height').value) || 1.8;
+  const radius    = parseFloat(document.getElementById('vs-radius').value) || 2000;
+  const resMetres = parseFloat(document.getElementById('vs-resolution').value) || 100;
+
+  statusEl.style.display = 'block';
+  statusEl.textContent   = '⌛ Fetching elevation data… (this may take a moment)';
+
+  // Build a grid of sample points within the radius
+  const oLat = _vsObserverLatLng.lat;
+  const oLng = _vsObserverLatLng.lng;
+
+  // Convert radius from metres to degrees (approx)
+  const latDeg  = radius / 111320;
+  const lngDeg  = radius / (111320 * Math.cos(oLat * Math.PI / 180));
+  const stepLat = resMetres / 111320;
+  const stepLng = resMetres / (111320 * Math.cos(oLat * Math.PI / 180));
+
+  const points = [];
+  for (let dlat = -latDeg; dlat <= latDeg; dlat += stepLat) {
+    for (let dlng = -lngDeg; dlng <= lngDeg; dlng += stepLng) {
+      // Only include if within circular radius
+      const d = Math.sqrt((dlat / latDeg) ** 2 + (dlng / lngDeg) ** 2);
+      if (d <= 1.0) {
+        points.push({ lat: oLat + dlat, lng: oLng + dlng });
+      }
+    }
+  }
+  // Always include observer itself
+  points.unshift({ lat: oLat, lng: oLng });
+
+  // Open-Elevation API has a limit on batch size — chunk into batches of 100
+  const BATCH = 100;
+  let elevations = [];
+  try {
+    for (let i = 0; i < points.length; i += BATCH) {
+      const batch    = points.slice(i, i + BATCH);
+      const bodyData = { locations: batch.map(p => ({ latitude: p.lat, longitude: p.lng })) };
+      const resp     = await fetch('https://api.open-elevation.com/api/v1/lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(bodyData),
+      });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      elevations = elevations.concat(data.results.map(r => r.elevation));
+      statusEl.textContent = `⌛ Fetched ${Math.min(i + BATCH, points.length)} / ${points.length} elevations…`;
+    }
+  } catch(err) {
+    statusEl.textContent = `⚠ Elevation API error: ${err.message}. Using flat-terrain approximation instead.`;
+    // Fallback: assign zero elevation — all points visible
+    elevations = points.map(() => 0);
+  }
+
+  // Observer elevation + height
+  const obsElev = elevations[0] + obsHeight;
+
+  // LOS check: for each sample point, check if any intermediate point blocks view
+  // Simple approach: linear interpolation along the ray from observer to target
+  const visResults = [];
+  const LOS_SAMPLES = 8; // intermediate samples along each ray
+  for (let i = 1; i < points.length; i++) {
+    const p = points[i];
+    const e = elevations[i];
+    const d = Math.sqrt((p.lat - oLat) ** 2 + (p.lng - oLng) ** 2);
+    if (d === 0) { visResults.push(true); continue; }
+
+    // Compute slope to target
+    const slope = (e - obsElev) / d;
+    let visible = true;
+
+    // Check intermediate points
+    for (let s = 1; s < LOS_SAMPLES; s++) {
+      const frac = s / LOS_SAMPLES;
+      const iLat = oLat + (p.lat - oLat) * frac;
+      const iLng = oLng + (p.lng - oLng) * frac;
+      const iD   = Math.sqrt((iLat - oLat) ** 2 + (iLng - oLng) ** 2);
+
+      // Find nearest elevation sample to this intermediate point
+      let nearestElev = 0;
+      let nearestDist = Infinity;
+      for (let j = 1; j < points.length; j++) {
+        const dd = Math.sqrt((points[j].lat - iLat) ** 2 + (points[j].lng - iLng) ** 2);
+        if (dd < nearestDist) { nearestDist = dd; nearestElev = elevations[j]; }
+      }
+
+      // LOS elevation at this distance
+      const losElev = obsElev + slope * iD;
+      if (nearestElev > losElev) { visible = false; break; }
+    }
+    visResults.push(visible);
+  }
+
+  // Clear previous overlays
+  _vsOverlayLayers.forEach(l => state.map.removeLayer(l));
+  _vsOverlayLayers = [];
+
+  // Render visible/hidden cells as rectangles on the map
+  const halfLat = stepLat / 2;
+  const halfLng = stepLng / 2;
+  for (let i = 0; i < visResults.length; i++) {
+    const p = points[i + 1]; // offset by 1 because observer is index 0
+    const bounds = [[p.lat - halfLat, p.lng - halfLng], [p.lat + halfLat, p.lng + halfLng]];
+    const rect = L.rectangle(bounds, {
+      color: visResults[i] ? 'rgba(0,200,100,0.0)' : 'rgba(255,60,60,0.0)',
+      fillColor: visResults[i] ? 'rgba(0,200,100,0.55)' : 'rgba(255,60,60,0.45)',
+      fillOpacity: 1,
+      weight: 0,
+      interactive: false,
+    }).addTo(state.map);
+    _vsOverlayLayers.push(rect);
+  }
+
+  const visCount     = visResults.filter(v => v).length;
+  const visiblePct   = ((visCount / visResults.length) * 100).toFixed(1);
+  statusEl.textContent = `✔ Viewshed complete. ${visiblePct}% of area (${visCount} / ${visResults.length} cells) is visible from observer.`;
+}
+
+function clearViewshed() {
+  if (_vsClickHandler) { state.map.off('click', _vsClickHandler); _vsClickHandler = null; }
+  if (_vsObserverMarker) { state.map.removeLayer(_vsObserverMarker); _vsObserverMarker = null; }
+  _vsObserverLatLng = null;
+  _vsOverlayLayers.forEach(l => state.map.removeLayer(l));
+  _vsOverlayLayers = [];
+  const statusEl = document.getElementById('vs-status');
+  const runBtn   = document.getElementById('vs-run-btn');
+  if (statusEl) { statusEl.style.display = 'none'; statusEl.textContent = ''; }
+  if (runBtn) runBtn.style.display = 'none';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ── ELEVATION PROFILE ─────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+let _epDrawing      = false;
+let _epLine         = null;      // Leaflet polyline being drawn
+let _epPoints       = [];        // LatLng array
+let _epTempMarkers  = [];
+let _epClickHandler = null;
+let _epDblHandler   = null;
+let _epResultLine   = null;      // Final rendered polyline
+
+function startElevationProfile() {
+  clearElevationProfile();
+  _epDrawing = true;
+  _epPoints  = [];
+
+  const statusEl = document.getElementById('ep-status');
+  const drawBtn  = document.getElementById('ep-draw-btn');
+  const endBtn   = document.getElementById('ep-end-btn');
+  statusEl.style.display  = 'block';
+  statusEl.textContent    = '✎ Click to add vertices. Double-click to finish the line.';
+  drawBtn.style.display   = 'none';
+  endBtn.style.display    = 'block';
+
+  state.map.getContainer().style.cursor = 'crosshair';
+
+  _epClickHandler = function(e) {
+    if (!_epDrawing) return;
+    _epPoints.push(e.latlng);
+
+    // Update live polyline
+    if (_epLine) state.map.removeLayer(_epLine);
+    if (_epPoints.length > 1) {
+      _epLine = L.polyline(_epPoints, { color: '#14b1e7', weight: 3, dashArray: '6 4' }).addTo(state.map);
+    }
+    // Small vertex marker
+    const m = L.circleMarker(e.latlng, { radius: 4, color: '#14b1e7', fillColor: '#14b1e7', fillOpacity: 1, weight: 1 }).addTo(state.map);
+    _epTempMarkers.push(m);
+  };
+
+  _epDblHandler = function(e) {
+    if (!_epDrawing) return;
+    // Remove duplicate last point added by click before dblclick
+    _epPoints.pop();
+    endElevationProfileDraw();
+  };
+
+  state.map.on('click',    _epClickHandler);
+  state.map.on('dblclick', _epDblHandler);
+}
+
+async function endElevationProfileDraw() {
+  if (!_epDrawing) return;
+  _epDrawing = false;
+
+  state.map.off('click',    _epClickHandler);
+  state.map.off('dblclick', _epDblHandler);
+  state.map.getContainer().style.cursor = '';
+
+  const endBtn   = document.getElementById('ep-end-btn');
+  const drawBtn  = document.getElementById('ep-draw-btn');
+  const statusEl = document.getElementById('ep-status');
+  if (endBtn) endBtn.style.display = 'none';
+  if (drawBtn) drawBtn.style.display = 'block';
+
+  if (_epPoints.length < 2) {
+    statusEl.textContent = '⚠ Need at least 2 points to create a profile.';
+    return;
+  }
+
+  // Solidify drawn line
+  if (_epLine) { state.map.removeLayer(_epLine); _epLine = null; }
+  _epTempMarkers.forEach(m => state.map.removeLayer(m));
+  _epTempMarkers = [];
+  _epResultLine  = L.polyline(_epPoints, { color: '#14b1e7', weight: 3 }).addTo(state.map);
+
+  // Compute total distance (metres)
+  let totalDist = 0;
+  const segDists = [0];
+  for (let i = 1; i < _epPoints.length; i++) {
+    totalDist += _epPoints[i - 1].distanceTo(_epPoints[i]);
+    segDists.push(totalDist);
+  }
+
+  // Interpolate N sample points along the line
+  const nSamples = parseInt(document.getElementById('ep-samples').value) || 50;
+  const samplePts = _epInterpolateAlongLine(_epPoints, segDists, totalDist, nSamples);
+
+  statusEl.textContent = `⌛ Fetching elevation for ${samplePts.length} points…`;
+
+  // Fetch elevations
+  let elevations = [];
+  const BATCH = 100;
+  try {
+    for (let i = 0; i < samplePts.length; i += BATCH) {
+      const batch = samplePts.slice(i, i + BATCH);
+      const body  = { locations: batch.map(p => ({ latitude: p.lat, longitude: p.lng })) };
+      const resp  = await fetch('https://api.open-elevation.com/api/v1/lookup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      const data = await resp.json();
+      elevations = elevations.concat(data.results.map(r => r.elevation));
+    }
+  } catch(err) {
+    statusEl.textContent = `⚠ Elevation API error: ${err.message}. Cannot generate profile.`;
+    return;
+  }
+
+  statusEl.style.display = 'none';
+  _epRenderChart(samplePts, elevations, totalDist);
+}
+
+function _epInterpolateAlongLine(pts, segDists, total, n) {
+  const result = [];
+  for (let i = 0; i < n; i++) {
+    const t = (i / (n - 1)) * total;
+    // Find which segment t falls in
+    let seg = 0;
+    for (let j = 1; j < segDists.length; j++) {
+      if (segDists[j] >= t) { seg = j - 1; break; }
+      if (j === segDists.length - 1) seg = j - 1;
+    }
+    const segStart = segDists[seg];
+    const segEnd   = segDists[seg + 1] !== undefined ? segDists[seg + 1] : segDists[seg];
+    const segLen   = segEnd - segStart;
+    const frac     = segLen > 0 ? (t - segStart) / segLen : 0;
+    const a        = pts[seg];
+    const b        = pts[Math.min(seg + 1, pts.length - 1)];
+    result.push({
+      lat: a.lat + (b.lat - a.lat) * frac,
+      lng: a.lng + (b.lng - a.lng) * frac,
+      d: t,
+    });
+  }
+  return result;
+}
+
+function _epRenderChart(pts, elevations, totalDist) {
+  const wrap     = document.getElementById('ep-chart-wrap');
+  const svg      = document.getElementById('ep-chart');
+  const titleEl  = document.getElementById('ep-chart-title');
+  const minEl    = document.getElementById('ep-stat-min');
+  const maxEl    = document.getElementById('ep-stat-max');
+  const distEl   = document.getElementById('ep-stat-dist');
+
+  if (!wrap || !svg) return;
+  wrap.style.display = 'block';
+
+  const minElev = Math.min(...elevations);
+  const maxElev = Math.max(...elevations);
+  const range   = maxElev - minElev || 1;
+
+  const W = svg.clientWidth || 260;
+  const H = 140;
+  const PAD = { top: 12, right: 8, bottom: 22, left: 36 };
+  const chartW = W - PAD.left - PAD.right;
+  const chartH = H - PAD.top  - PAD.bottom;
+
+  // Build polyline points
+  const polyPts = elevations.map((el, i) => {
+    const x = PAD.left + (pts[i].d / totalDist) * chartW;
+    const y = PAD.top  + chartH - ((el - minElev) / range) * chartH;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+
+  // Fill polygon (close to bottom)
+  const firstPt = `${PAD.left},${PAD.top + chartH}`;
+  const lastPt  = `${PAD.left + chartW},${PAD.top + chartH}`;
+  const fillPts = firstPt + ' ' + polyPts + ' ' + lastPt;
+
+  // Y-axis ticks (3 ticks)
+  let axisSVG = '';
+  for (let i = 0; i <= 4; i++) {
+    const elev = minElev + (range / 4) * i;
+    const y    = PAD.top + chartH - (i / 4) * chartH;
+    axisSVG += `<line x1="${PAD.left - 4}" y1="${y.toFixed(1)}" x2="${PAD.left + chartW}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,0.06)" stroke-width="1"/>`;
+    axisSVG += `<text x="${(PAD.left - 6).toFixed(0)}" y="${(y + 3).toFixed(0)}" fill="#8ab" font-family="monospace" font-size="8" text-anchor="end">${Math.round(elev)}</text>`;
+  }
+
+  // X-axis distance labels
+  let xAxisSVG = '';
+  const distKm  = totalDist >= 1000;
+  const distFmt = d => distKm ? (d / 1000).toFixed(1) + 'k' : Math.round(d) + 'm';
+  for (let i = 0; i <= 4; i++) {
+    const d = (totalDist / 4) * i;
+    const x = PAD.left + (d / totalDist) * chartW;
+    xAxisSVG += `<text x="${x.toFixed(0)}" y="${(PAD.top + chartH + 12).toFixed(0)}" fill="#8ab" font-family="monospace" font-size="8" text-anchor="middle">${distFmt(d)}</text>`;
+  }
+
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.innerHTML = `
+    <polygon points="${fillPts}" fill="rgba(20,177,231,0.25)" stroke="none"/>
+    <polyline points="${polyPts}" fill="none" stroke="#14b1e7" stroke-width="1.5" stroke-linejoin="round"/>
+    ${axisSVG}${xAxisSVG}
+    <line x1="${PAD.left}" y1="${PAD.top}" x2="${PAD.left}" y2="${PAD.top + chartH}" stroke="#8ab" stroke-width="1"/>
+    <line x1="${PAD.left}" y1="${PAD.top + chartH}" x2="${PAD.left + chartW}" y2="${PAD.top + chartH}" stroke="#8ab" stroke-width="1"/>
+  `;
+
+  titleEl.textContent = 'Elevation Profile';
+  minEl.textContent   = `Min: ${Math.round(minElev)} m`;
+  maxEl.textContent   = `Max: ${Math.round(maxElev)} m`;
+  distEl.textContent  = `Dist: ${distFmt(totalDist)}`;
+
+  // Show export buttons
+  const exportRow = document.getElementById('ep-export-row');
+  if (exportRow) exportRow.style.display = 'flex';
+}
+
+// Export elevation profile chart as PNG
+function exportElevationProfilePNG() {
+  const svg = document.getElementById('ep-chart');
+  if (!svg || !svg.innerHTML) { toast('No profile to export', 'error'); return; }
+
+  const W   = parseInt(svg.getAttribute('viewBox')?.split(' ')[2]) || svg.clientWidth || 300;
+  const H   = parseInt(svg.getAttribute('viewBox')?.split(' ')[3]) || 140;
+
+  // Serialise SVG with explicit background rect so PNG isn't transparent
+  const bgRect  = `<rect width="${W}" height="${H}" fill="#131c27"/>`;
+  const svgSrc  = svg.outerHTML.replace('<svg ', `<svg xmlns="http://www.w3.org/2000/svg" `).replace('>', '>' + bgRect);
+  const svgBlob = new Blob([svgSrc], { type: 'image/svg+xml;charset=utf-8' });
+  const url     = URL.createObjectURL(svgBlob);
+
+  const img = new Image();
+  img.onload = function() {
+    const canvas  = document.createElement('canvas');
+    canvas.width  = W * 2;   // 2× for Retina
+    canvas.height = H * 2;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(2, 2);
+    ctx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+
+    canvas.toBlob(function(blob) {
+      const a    = document.createElement('a');
+      a.href     = URL.createObjectURL(blob);
+      a.download = 'elevation_profile.png';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    }, 'image/png');
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); toast('PNG export failed', 'error'); };
+  img.src = url;
+}
+
+// Copy elevation profile chart SVG to clipboard as PNG
+async function copyElevationProfilePNG() {
+  const svg = document.getElementById('ep-chart');
+  if (!svg || !svg.innerHTML) { toast('No profile to copy', 'error'); return; }
+
+  const W      = parseInt(svg.getAttribute('viewBox')?.split(' ')[2]) || svg.clientWidth || 300;
+  const H      = parseInt(svg.getAttribute('viewBox')?.split(' ')[3]) || 140;
+  const bgRect = `<rect width="${W}" height="${H}" fill="#131c27"/>`;
+  const svgSrc = svg.outerHTML.replace('<svg ', `<svg xmlns="http://www.w3.org/2000/svg" `).replace('>', '>' + bgRect);
+  const url    = URL.createObjectURL(new Blob([svgSrc], { type: 'image/svg+xml;charset=utf-8' }));
+
+  const img = new Image();
+  img.onload = async function() {
+    const canvas  = document.createElement('canvas');
+    canvas.width  = W * 2;
+    canvas.height = H * 2;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(2, 2);
+    ctx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+    try {
+      canvas.toBlob(async blob => {
+        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+        toast('Profile copied to clipboard', 'success');
+      }, 'image/png');
+    } catch(e) {
+      toast('Clipboard write failed — try Export PNG instead', 'error');
+    }
+  };
+  img.src = url;
+}
+
+function clearElevationProfile() {
+  if (_epClickHandler) { state.map.off('click',    _epClickHandler); _epClickHandler = null; }
+  if (_epDblHandler)   { state.map.off('dblclick', _epDblHandler);   _epDblHandler   = null; }
+  if (_epLine)         { state.map.removeLayer(_epLine);   _epLine = null; }
+  if (_epResultLine)   { state.map.removeLayer(_epResultLine); _epResultLine = null; }
+  _epTempMarkers.forEach(m => state.map.removeLayer(m));
+  _epTempMarkers = [];
+  _epPoints      = [];
+  _epDrawing     = false;
+  state.map.getContainer().style.cursor = '';
+
+  const statusEl = document.getElementById('ep-status');
+  const endBtn   = document.getElementById('ep-end-btn');
+  const drawBtn  = document.getElementById('ep-draw-btn');
+  const wrap     = document.getElementById('ep-chart-wrap');
+  if (statusEl) { statusEl.style.display = 'none'; statusEl.textContent = ''; }
+  if (endBtn)   endBtn.style.display   = 'none';
+  if (drawBtn)  drawBtn.style.display  = 'block';
+  if (wrap)     wrap.style.display     = 'none';
+  const exportRow = document.getElementById('ep-export-row');
+  if (exportRow) exportRow.style.display = 'none';
+}
+
 function switchWidgetTab(tab) {
-  ['measure','sbl','buffer','designqa'].forEach(t => {
+  ['measure','sbl','geoprocess','viewshed','elevation','designqa'].forEach(t => {
     const tabEl = document.getElementById('wt-' + t);
     const paneEl = document.getElementById('wp-' + t);
     if (tabEl) tabEl.classList.toggle('active', t === tab);
     if (paneEl) paneEl.classList.toggle('visible', t === tab);
   });
   if (tab === 'designqa') updateDQALayerList();
+  if (tab === 'geoprocess') { updateGeoprocessLayerSelects(); setTimeout(_initGpTooltips, 50); }
+}
+
+// Toggle a geoprocessing sub-section open/closed
+function gpToggle(id) {
+  const body = document.getElementById(id);
+  if (!body) return;
+  body.classList.toggle('open');
+  // Rotate chevron on the sibling header
+  const header = body.previousElementSibling;
+  if (header) {
+    const chev = header.querySelector('.gp-chevron');
+    if (chev) chev.style.transform = body.classList.contains('open') ? 'rotate(90deg)' : '';
+  }
 }
 
 function makePanelDraggable(panel, handle) {

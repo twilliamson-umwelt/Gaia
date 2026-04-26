@@ -22,6 +22,12 @@
         integrity="sha384-PLACEHOLDER-togeojson.umd.js" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
         integrity="sha384-PLACEHOLDER-xlsx.full.min.js" crossorigin="anonymous"></script>
+<!-- sql.js — GeoPackage (.gpkg) support -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/sql.js/1.10.3/sql-wasm.js"
+        crossorigin="anonymous"></script>
+<!-- MapLibre GL JS — 3D map support -->
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css"/>
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
 
 <link rel="stylesheet" href="css/gaia.css"/>
 <!-- pdf-lib for PDF template export -->
@@ -570,9 +576,10 @@
             <span class="format-tag ft-kml">.KML / .KMZ</span>
             <span class="format-tag ft-json">.GEOJSON / .JSON</span>
             <span class="format-tag ft-json" style="color:#a0c070;border-color:rgba(160,192,112,0.4);background:rgba(160,192,112,0.08);">.CSV</span>
+            <span class="format-tag ft-json" style="color:#c0a030;border-color:rgba(192,160,48,0.4);background:rgba(192,160,48,0.08);">.GPKG</span>
           </div>
         </div>
-        <input type="file" id="file-input" multiple accept=".shp,.dbf,.prj,.shx,.cpg,.kml,.kmz,.geojson,.json,.zip,.csv,.txt,.gaia" style="display:none" onchange="handleFileSelect(event)"/>
+        <input type="file" id="file-input" multiple accept=".shp,.dbf,.prj,.shx,.cpg,.kml,.kmz,.geojson,.json,.zip,.gpkg,.csv,.txt,.gaia" style="display:none" onchange="handleFileSelect(event)"/>
         <div style="padding:0 10px 10px;">
           <button class="btn btn-ghost btn-full" onclick="openURLModal()" style="font-size:10px;">
             🔗 Add Layer from URL / REST Service
@@ -654,6 +661,31 @@
            border-radius:0 0 6px 6px;box-shadow:0 4px 12px rgba(0,0,0,0.25);display:none;max-height:220px;overflow-y:auto;">
       </div>
       <div id="map">
+      <!-- Legend map control button -->
+      <button id="legend-map-btn" title="Toggle Legend" onclick="toggleMapLegend()">▤</button>
+      <!-- Floating legend panel -->
+      <div id="legend-float">
+        <div id="legend-float-header">
+          <span>▤ Legend</span>
+          <button onclick="toggleMapLegend()" style="background:none;border:none;cursor:pointer;color:var(--text3);font-size:13px;padding:0 2px;line-height:1;">✕</button>
+        </div>
+        <div id="legend-body" class="panel-body" style="padding:8px 10px;"></div>
+      </div>
+      <!-- Geoprocess hover tooltip -->
+      <div id="gp-tooltip"></div>
+      <!-- 3D Map overlay (MapLibre GL) — hidden until toggle -->
+      <div id="map-3d" style="display:none;position:absolute;inset:0;z-index:600;"></div>
+      <!-- 3D controls bar — shown when 3D is active -->
+      <div id="map-3d-controls" style="position:absolute;bottom:12px;left:50%;transform:translateX(-50%);z-index:700;
+           background:rgba(20,30,45,0.88);border:1px solid rgba(20,177,231,0.3);border-radius:8px;
+           padding:6px 10px;display:none;align-items:center;gap:10px;pointer-events:auto;">
+        <span style="font-family:var(--mono);font-size:9px;color:#8ab;letter-spacing:1px;">3D VIEW</span>
+        <label style="font-family:var(--mono);font-size:9px;color:#8ab;">Tilt</label>
+        <input type="range" id="map3d-pitch" min="0" max="85" value="45" style="width:80px;" oninput="_update3DPitch(this.value)"/>
+        <label style="font-family:var(--mono);font-size:9px;color:#8ab;">Bearing</label>
+        <input type="range" id="map3d-bearing" min="-180" max="180" value="0" style="width:80px;" oninput="_update3DBearing(this.value)"/>
+        <button onclick="toggle3DMap()" style="background:rgba(255,80,80,0.18);border:1px solid rgba(255,80,80,0.4);border-radius:4px;color:#f87;font-family:var(--mono);font-size:9px;padding:2px 8px;cursor:pointer;">✕ Exit 3D</button>
+      </div>
       <!-- GUIDED EMPTY STATE — hidden once first layer loads -->
       <div id="map-empty-state">
         <div id="mes-inner">
@@ -731,6 +763,9 @@
       <button class="btn btn-ghost btn-full" onclick="toggleWidgetPanel()" id="widgets-open-btn" style="font-size:10px;">
         ⚙ Widgets
       </button>
+      <button class="btn btn-ghost btn-full" onclick="toggle3DMap()" id="btn-3d-toggle" style="font-size:10px;">
+        🏙 Enable 3D View
+      </button>
 
 
     </div>
@@ -760,14 +795,6 @@
     </div>
     <!-- Feature Inspector stub (hidden, keeps JS compatibility) -->
     <div id="feature-content" style="display:none;"></div>
-    <!-- Legend -->
-    <div class="panel-section" id="legend-section" style="display:none;">
-      <div class="panel-header" onclick="toggleSection(this)">
-        <span>▤</span> Legend
-        <svg class="chevron" width="12" height="12" viewBox="0 0 12 12"><path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
-      </div>
-      <div class="panel-body" id="legend-body" style="padding:8px 10px;"></div>
-    </div>
   </div>
 </div>
 
@@ -816,6 +843,7 @@
         <li><strong>Shapefile</strong> — drop the .shp, .dbf, .prj files together (or as a ZIP)</li>
         <li><strong>GeoJSON / JSON</strong> — standard vector format</li>
         <li><strong>KML / KMZ</strong> — Google Earth files</li>
+        <li><strong>GeoPackage (.gpkg)</strong> — SQLite-based multi-layer format; all feature tables loaded as separate layers</li>
         <li><strong>CSV / TXT</strong> — auto-detects lat/lng or x_easting/y_northing columns; also reads a <code>wkt_geometry</code> column for lines and polygons</li>
         <li><strong>ZIP</strong> — drop a zip containing any of the above</li>
         <li><strong>.gaia</strong> — Gaia session export file; restores all layers and symbology</li>
@@ -865,7 +893,7 @@
       </ul>
 
       <div style="margin-top:16px;padding:10px 12px;background:#edf0f3;border-radius:6px;font-size:10px;color:var(--text3);line-height:1.6;">
-        Built by <a href="https://umwelt.com.au/" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:none;">Umwelt</a> · Powered by Leaflet, Proj4js, SheetJS, shapefile.js, toGeoJSON, JSZip
+        Built by <a href="https://umwelt.com.au/" target="_blank" rel="noopener noreferrer" style="color:var(--accent);text-decoration:none;">Umwelt</a> · Powered by Leaflet, Proj4js, SheetJS, shapefile.js, toGeoJSON, JSZip, sql.js
       </div>
     </div>
   </div>
@@ -1352,7 +1380,9 @@
     <div class="widget-tab-bar">
       <div class="widget-tab active" onclick="switchWidgetTab('measure')" id="wt-measure">📏 Measure</div>
       <div class="widget-tab" onclick="switchWidgetTab('sbl')" id="wt-sbl">📍 Select</div>
-      <div class="widget-tab" onclick="switchWidgetTab('buffer')" id="wt-buffer">⬡ Buffer</div>
+      <div class="widget-tab" onclick="switchWidgetTab('geoprocess')" id="wt-geoprocess">⚙ Geoprocess</div>
+      <div class="widget-tab" onclick="switchWidgetTab('viewshed')" id="wt-viewshed">👁 Viewshed</div>
+      <div class="widget-tab" onclick="switchWidgetTab('elevation')" id="wt-elevation">📈 Elevation</div>
       <div class="widget-tab" onclick="switchWidgetTab('designqa')" id="wt-designqa">✅ Design QA</div>
     </div>
 
@@ -1408,8 +1438,8 @@
       <div id="sbl-result" style="font-family:var(--mono);font-size:10px;color:var(--accent);padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;display:none;"></div>
     </div>
 
-    <!-- BUFFER PANE -->
-    <div class="widget-pane" id="wp-buffer">
+    <!-- BUFFER PANE — superseded by Geoprocess tab; kept hidden for JS compat -->
+    <div class="widget-pane" id="wp-buffer" style="display:none!important;">
       <div style="margin-bottom:6px;">
         <label style="font-size:9px;color:var(--text3);display:block;margin-bottom:3px;font-family:var(--mono);letter-spacing:0.5px;text-transform:uppercase;">Buffer Source</label>
         <select id="wbuffer-source" onchange="onWBufferSourceChange()">
@@ -1433,6 +1463,266 @@
       </div>
       <button class="btn btn-primary btn-full" onclick="runWidgetBuffer()" style="font-size:9px;">⬡ Create Buffer Layer</button>
       <div id="wbuffer-result" style="font-family:var(--mono);font-size:10px;color:var(--accent);padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;margin-top:6px;display:none;"></div>
+    </div>
+
+    <!-- GEOPROCESSING PANE -->
+    <div class="widget-pane" id="wp-geoprocess" style="padding:0;">
+
+      <!-- Sub-group header style -->
+      <style>
+        .gp-section { border-bottom:1px solid var(--border); }
+        .gp-section-header {
+          display:flex; align-items:center; gap:6px;
+          padding:7px 10px; cursor:pointer;
+          background:var(--bg3); user-select:none;
+          font-family:var(--mono); font-size:9px; font-weight:700;
+          color:var(--text2); letter-spacing:0.8px; text-transform:uppercase;
+          position:relative;
+        }
+        .gp-section-header:hover { background:var(--bg2); }
+        .gp-section-body { padding:8px 10px 10px; display:none; }
+        .gp-section-body.open { display:block; }
+        .gp-label { font-size:9px;color:var(--text3);display:block;margin-bottom:3px;font-family:var(--mono);letter-spacing:0.5px;text-transform:uppercase; }
+        .gp-row { margin-bottom:6px; }
+        .gp-result { font-family:var(--mono);font-size:10px;color:var(--accent);padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;margin-top:6px;display:none; }
+        .gp-chevron { margin-left:auto; font-size:10px; transition:transform 0.15s; flex-shrink:0; }
+
+        /* Geoprocess hover tooltip */
+        #gp-tooltip {
+          position:fixed; z-index:9900; pointer-events:none;
+          background:#1a2433; border:1px solid var(--teal);
+          border-radius:6px; padding:8px 10px; max-width:240px;
+          font-family:var(--mono); font-size:9px; line-height:1.6;
+          color:#c8d8e8; box-shadow:0 4px 16px rgba(0,0,0,0.4);
+          opacity:0; transition:opacity 0.15s;
+        }
+        #gp-tooltip.visible { opacity:1; }
+
+        /* Legend floating button on map */
+        #legend-map-btn {
+          position:absolute; z-index:800;
+          left:10px; top:80px;
+          width:30px; height:30px;
+          background:white; border:2px solid rgba(0,0,0,0.25);
+          border-radius:4px; cursor:pointer;
+          display:flex; align-items:center; justify-content:center;
+          font-size:14px; box-shadow:0 1px 5px rgba(0,0,0,0.2);
+          transition:background 0.15s;
+        }
+        #legend-map-btn:hover { background:#f4f4f4; }
+        #legend-map-btn.active { background:#e8f4fb; border-color:var(--teal); }
+
+        /* Legend floating panel */
+        #legend-float {
+          position:absolute; z-index:799;
+          left:48px; top:80px;
+          background:var(--bg2); border:1px solid var(--border);
+          border-radius:8px; box-shadow:0 4px 20px rgba(0,0,0,0.25);
+          min-width:180px; max-width:260px; max-height:60vh;
+          overflow-y:auto; display:none;
+        }
+        #legend-float.open { display:block; animation:wfadeIn 0.12s ease; }
+        #legend-float-header {
+          padding:8px 10px 6px; border-bottom:1px solid var(--border);
+          font-family:var(--mono); font-size:9px; font-weight:700;
+          color:var(--text2); letter-spacing:1px; text-transform:uppercase;
+          display:flex; align-items:center; justify-content:space-between;
+          background:var(--bg3); border-radius:8px 8px 0 0;
+        }
+        #legend-float-body { padding:8px 10px; }
+
+        /* 3D map controls bar alignment */
+        #map-3d-controls { display:none; }
+        #map-3d-controls.active { display:flex; }
+      </style>
+
+      <!-- Buffer -->
+      <div class="gp-section">
+        <div class="gp-section-header" onclick="gpToggle('gp-buf')"
+             data-gp-tip="Creates polygon rings at a set distance around each feature. Points become circles, lines get a corridor, polygons expand outward. Merge combines all rings into a single clean boundary.">
+          ⬡ Buffer<span style="color:var(--text3);font-weight:400;margin-left:4px;text-transform:none;letter-spacing:0;">— distance rings</span>
+          <span class="gp-chevron">▶</span>
+        </div>
+        <div class="gp-section-body" id="gp-buf">
+          <div class="gp-row"><label class="gp-label">Source Layer</label><select id="gp-buffer-src"><option value="">— select layer —</option></select></div>
+          <div class="gp-row"><label class="gp-label">Buffer Distance (metres)</label><input type="number" id="gp-buffer-dist" value="500" min="1" style="padding:4px 7px;font-size:10px;width:100%;box-sizing:border-box;"/></div>
+          <div class="gp-row" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="gp-buffer-merge"/><label for="gp-buffer-merge" style="font-size:9px;color:var(--text2);">Merge / dissolve output</label></div>
+          <div class="gp-row"><label class="gp-label">Output Name</label><input type="text" id="gp-buffer-name" placeholder="Buffer Result" style="padding:4px 7px;font-size:10px;width:100%;box-sizing:border-box;"/></div>
+          <button class="btn btn-primary btn-full" onclick="runGeoBuffer()" style="font-size:9px;">⬡ Run Buffer</button>
+          <div class="gp-result" id="gp-buffer-result"></div>
+        </div>
+      </div>
+
+      <!-- Intersection -->
+      <div class="gp-section">
+        <div class="gp-section-header" onclick="gpToggle('gp-int')"
+             data-gp-tip="Returns features from Layer A that spatially overlap with polygons in Layer B. Use this to filter a dataset to only the parts that fall within a study area or another polygon layer.">
+          ⊓ Intersection<span style="color:var(--text3);font-weight:400;margin-left:4px;text-transform:none;letter-spacing:0;">— overlapping features</span>
+          <span class="gp-chevron">▶</span>
+        </div>
+        <div class="gp-section-body" id="gp-int">
+          <div class="gp-row"><label class="gp-label">Layer A (features to keep)</label><select id="gp-intersect-a"><option value="">— select layer —</option></select></div>
+          <div class="gp-row"><label class="gp-label">Layer B (clip / select by)</label><select id="gp-intersect-b"><option value="">— select layer —</option></select></div>
+          <div class="gp-row"><label class="gp-label">Output Name</label><input type="text" id="gp-intersect-name" placeholder="Intersection" style="padding:4px 7px;font-size:10px;width:100%;box-sizing:border-box;"/></div>
+          <button class="btn btn-primary btn-full" onclick="runGeoIntersection()" style="font-size:9px;">⊓ Run Intersection</button>
+          <div class="gp-result" id="gp-intersect-result"></div>
+        </div>
+      </div>
+
+      <!-- Union -->
+      <div class="gp-section">
+        <div class="gp-section-header" onclick="gpToggle('gp-union')"
+             data-gp-tip="Combines all features from a single layer into one merged feature. Useful for collapsing many polygons or lines into a single geometry object, preserving the outer boundary of the whole dataset.">
+          ⊔ Union<span style="color:var(--text3);font-weight:400;margin-left:4px;text-transform:none;letter-spacing:0;">— combine all features</span>
+          <span class="gp-chevron">▶</span>
+        </div>
+        <div class="gp-section-body" id="gp-union">
+          <div class="gp-row"><label class="gp-label">Source Layer</label><select id="gp-union-src"><option value="">— select layer —</option></select></div>
+          <div class="gp-row"><label class="gp-label">Output Name</label><input type="text" id="gp-union-name" placeholder="Union" style="padding:4px 7px;font-size:10px;width:100%;box-sizing:border-box;"/></div>
+          <button class="btn btn-primary btn-full" onclick="runGeoUnion()" style="font-size:9px;">⊔ Run Union</button>
+          <div class="gp-result" id="gp-union-result"></div>
+        </div>
+      </div>
+
+      <!-- Dissolve -->
+      <div class="gp-section">
+        <div class="gp-section-header" onclick="gpToggle('gp-dis')"
+             data-gp-tip="Groups features that share the same attribute value and merges their geometries. For example: dissolve land parcels by 'zone_type' to produce one polygon per zone. Leave field blank to merge all features together.">
+          ◎ Dissolve<span style="color:var(--text3);font-weight:400;margin-left:4px;text-transform:none;letter-spacing:0;">— merge by attribute</span>
+          <span class="gp-chevron">▶</span>
+        </div>
+        <div class="gp-section-body" id="gp-dis">
+          <div class="gp-row"><label class="gp-label">Source Layer</label><select id="gp-dissolve-src" onchange="_gpPopulateDissolveFields()"><option value="">— select layer —</option></select></div>
+          <div class="gp-row"><label class="gp-label">Dissolve Field</label><select id="gp-dissolve-field"><option value="">— all features (merge all) —</option></select></div>
+          <div class="gp-row"><label class="gp-label">Output Name</label><input type="text" id="gp-dissolve-name" placeholder="Dissolve" style="padding:4px 7px;font-size:10px;width:100%;box-sizing:border-box;"/></div>
+          <button class="btn btn-primary btn-full" onclick="runGeoDissolve()" style="font-size:9px;">◎ Run Dissolve</button>
+          <div class="gp-result" id="gp-dissolve-result"></div>
+        </div>
+      </div>
+
+      <!-- Simplify -->
+      <div class="gp-section">
+        <div class="gp-section-header" onclick="gpToggle('gp-sim')"
+             data-gp-tip="Reduces the number of vertices in line and polygon geometries using the Douglas-Peucker algorithm. Lower tolerance = more detail kept. Higher tolerance = smoother, fewer vertices. Tolerance is in degrees (0.0001° ≈ 11m).">
+          〰 Simplify<span style="color:var(--text3);font-weight:400;margin-left:4px;text-transform:none;letter-spacing:0;">— Douglas-Peucker</span>
+          <span class="gp-chevron">▶</span>
+        </div>
+        <div class="gp-section-body" id="gp-sim">
+          <div class="gp-row"><label class="gp-label">Source Layer</label><select id="gp-simplify-src"><option value="">— select layer —</option></select></div>
+          <div class="gp-row"><label class="gp-label">Tolerance (degrees, e.g. 0.0001)</label><input type="number" id="gp-simplify-tol" value="0.0001" min="0.000001" step="0.00001" style="padding:4px 7px;font-size:10px;width:100%;box-sizing:border-box;"/></div>
+          <div class="gp-row"><label class="gp-label">Output Name</label><input type="text" id="gp-simplify-name" placeholder="Simplified" style="padding:4px 7px;font-size:10px;width:100%;box-sizing:border-box;"/></div>
+          <button class="btn btn-primary btn-full" onclick="runGeoSimplify()" style="font-size:9px;">〰 Run Simplify</button>
+          <div class="gp-result" id="gp-simplify-result"></div>
+        </div>
+      </div>
+
+      <!-- Centroid -->
+      <div class="gp-section">
+        <div class="gp-section-header" onclick="gpToggle('gp-cen')"
+             data-gp-tip="Calculates the geometric centre point of each feature. Polygons become their centroid, lines become their midpoint, and points stay as-is. All original attributes are carried through to the output point layer.">
+          ✦ Centroid<span style="color:var(--text3);font-weight:400;margin-left:4px;text-transform:none;letter-spacing:0;">— calculate centres</span>
+          <span class="gp-chevron">▶</span>
+        </div>
+        <div class="gp-section-body" id="gp-cen">
+          <div class="gp-row"><label class="gp-label">Source Layer</label><select id="gp-centroid-src"><option value="">— select layer —</option></select></div>
+          <div class="gp-row"><label class="gp-label">Output Name</label><input type="text" id="gp-centroid-name" placeholder="Centroids" style="padding:4px 7px;font-size:10px;width:100%;box-sizing:border-box;"/></div>
+          <button class="btn btn-primary btn-full" onclick="runGeoCentroid()" style="font-size:9px;">✦ Run Centroid</button>
+          <div class="gp-result" id="gp-centroid-result"></div>
+        </div>
+      </div>
+
+      <!-- Bounding Geometry -->
+      <div class="gp-section">
+        <div class="gp-section-header" onclick="gpToggle('gp-hull')"
+             data-gp-tip="Generates a bounding polygon that encloses all features. Convex Hull = tightest convex shape. Bounding Box = axis-aligned rectangle. Oriented BBox = smallest rotated rectangle. Bounding Circle = smallest enclosing circle. Toggle per-feature to get an individual shape for each feature.">
+          ⬠ Bounding Geometry<span style="color:var(--text3);font-weight:400;margin-left:4px;text-transform:none;letter-spacing:0;">— hull / bbox / circle</span>
+          <span class="gp-chevron">▶</span>
+        </div>
+        <div class="gp-section-body" id="gp-hull">
+          <div class="gp-row"><label class="gp-label">Source Layer</label><select id="gp-hull-src"><option value="">— select layer —</option></select></div>
+          <div class="gp-row">
+            <label class="gp-label">Geometry Type</label>
+            <select id="gp-hull-type" style="width:100%;padding:4px 7px;font-size:10px;">
+              <option value="convex_hull">Convex Hull</option>
+              <option value="bbox">Bounding Box (axis-aligned)</option>
+              <option value="oriented_bbox">Oriented Bounding Box</option>
+              <option value="circle">Bounding Circle</option>
+            </select>
+          </div>
+          <div class="gp-row" style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="gp-hull-per"/><label for="gp-hull-per" style="font-size:9px;color:var(--text2);">Per-feature bounding geometry</label></div>
+          <div class="gp-row"><label class="gp-label">Output Name</label><input type="text" id="gp-hull-name" placeholder="Bounding Geometry" style="padding:4px 7px;font-size:10px;width:100%;box-sizing:border-box;"/></div>
+          <button class="btn btn-primary btn-full" onclick="runGeoBoundingGeometry()" style="font-size:9px;">⬠ Run Bounding Geometry</button>
+          <div class="gp-result" id="gp-hull-result"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- VIEWSHED PANE -->
+    <div class="widget-pane" id="wp-viewshed" style="padding:10px;">
+      <p style="font-family:var(--mono);font-size:9px;color:var(--text3);margin:0 0 8px;line-height:1.6;">
+        Click a point on the map to set an observer location. Viewshed calculates which areas are visible from that point using terrain elevation data.
+      </p>
+      <div class="gp-row">
+        <label class="gp-label">Observer Height (m above ground)</label>
+        <input type="number" id="vs-observer-height" value="1.8" min="0" step="0.1"
+               style="width:100%;padding:4px 7px;font-size:10px;box-sizing:border-box;"/>
+      </div>
+      <div class="gp-row">
+        <label class="gp-label">Analysis Radius (metres)</label>
+        <input type="number" id="vs-radius" value="2000" min="100" max="10000" step="100"
+               style="width:100%;padding:4px 7px;font-size:10px;box-sizing:border-box;"/>
+      </div>
+      <div class="gp-row">
+        <label class="gp-label">Grid Resolution (metres between sample points)</label>
+        <input type="number" id="vs-resolution" value="100" min="20" max="500" step="20"
+               style="width:100%;padding:4px 7px;font-size:10px;box-sizing:border-box;"/>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:6px;">
+        <button class="btn btn-primary" style="flex:1;font-size:9px;" id="vs-start-btn" onclick="startViewshed()">📍 Set Observer Point</button>
+        <button class="btn btn-ghost btn-sm" style="font-size:9px;" onclick="clearViewshed()" title="Clear viewshed">✕</button>
+      </div>
+      <button id="vs-run-btn" class="btn btn-primary btn-full" style="font-size:9px;display:none;" onclick="runViewshed()">👁 Run Viewshed Analysis</button>
+      <div id="vs-status" style="font-family:var(--mono);font-size:9px;color:var(--accent);margin-top:6px;display:none;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;"></div>
+      <div style="margin-top:8px;padding:6px 8px;background:var(--bg);border-radius:4px;border:1px solid var(--border);font-family:var(--mono);font-size:8px;color:var(--text3);line-height:1.6;">
+        <strong style="color:var(--text2);">Legend:</strong><br/>
+        <span style="color:rgba(0,200,100,0.8);">■</span> Visible area &nbsp;
+        <span style="color:rgba(255,60,60,0.7);">■</span> Hidden area<br/>
+        Elevation data: Open-Elevation API
+      </div>
+    </div>
+
+    <!-- ELEVATION PROFILE PANE -->
+    <div class="widget-pane" id="wp-elevation" style="padding:10px;">
+      <p style="font-family:var(--mono);font-size:9px;color:var(--text3);margin:0 0 8px;line-height:1.6;">
+        Draw a line on the map to generate an elevation profile. Click to add vertices, double-click to finish.
+      </p>
+      <div class="gp-row">
+        <label class="gp-label">Sample Points Along Profile</label>
+        <input type="number" id="ep-samples" value="50" min="10" max="100" step="5"
+               style="width:100%;padding:4px 7px;font-size:10px;box-sizing:border-box;"/>
+      </div>
+      <div style="display:flex;gap:6px;margin-bottom:6px;">
+        <button class="btn btn-primary" style="flex:1;font-size:9px;" id="ep-draw-btn" onclick="startElevationProfile()">✎ Draw Profile Line</button>
+        <button class="btn btn-ghost btn-sm" style="font-size:9px;" onclick="clearElevationProfile()" title="Clear profile">✕</button>
+      </div>
+      <button id="ep-end-btn" class="btn btn-ghost btn-full" style="font-size:9px;display:none;border-color:var(--orange);color:var(--orange);margin-bottom:6px;" onclick="endElevationProfileDraw()">⏹ Finish Line</button>
+      <div id="ep-status" style="font-family:var(--mono);font-size:9px;color:var(--accent);margin-bottom:6px;display:none;padding:4px 6px;background:var(--bg);border:1px solid var(--border);border-radius:4px;"></div>
+      <!-- Chart area -->
+      <div id="ep-chart-wrap" style="display:none;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px;margin-top:4px;">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:4px;" id="ep-chart-title"></div>
+        <svg id="ep-chart" width="100%" height="140" style="display:block;"></svg>
+        <div style="display:flex;justify-content:space-between;font-family:var(--mono);font-size:8px;color:var(--text3);margin-top:2px;">
+          <span id="ep-stat-min"></span>
+          <span id="ep-stat-max"></span>
+          <span id="ep-stat-dist"></span>
+        </div>
+      </div>
+      <!-- Export buttons — shown after chart is rendered -->
+      <div id="ep-export-row" style="display:none;gap:6px;margin-top:8px;">
+        <button class="btn btn-ghost btn-sm" style="flex:1;font-size:9px;" onclick="exportElevationProfilePNG()">⬇ Export PNG</button>
+        <button class="btn btn-ghost btn-sm" style="flex:1;font-size:9px;" onclick="copyElevationProfilePNG()">📋 Copy PNG</button>
+      </div>
     </div>
 
     <!-- DESIGN QA PANE -->
